@@ -42,8 +42,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg")
     .pip_install(
-        "faster-whisper==1.1.1",
-        "av>=11.0",  # PyAV 11+ adds metadata_errors support; faster-whisper needs it
+        "faster-whisper==1.0.3",  # 1.0.3 does NOT pass metadata_errors to av.open (added in 1.1.0); compatible with the older PyAV actually installed at runtime
         "yt-dlp>=2026.10.26",
         "opencv-python-headless>=4.9",
         "nudenet==3.4.2",
