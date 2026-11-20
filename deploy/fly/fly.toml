@@ -1,6 +1,7 @@
 # vice-city-vibes-clipper — Clipper Engine watcher + web dashboard on Fly.io
-# App: vice-city-vibes-clipper, shared-cpu-1x, 512MB RAM (~$3.19/month,
-# under the $5 personal-org waiver, so $0 while the bill stays under $5).
+# App: vice-city-vibes-clipper, shared-cpu-1x, 1GB RAM (~$5.70/month
+# if run 24/7; per-second billing — run on-demand to stay under $5).
+# 1GB chosen 2026-11-19: 512MB OOM-killed the watcher scout (yt-dlp).
 # One machine runs BOTH: the watcher (scouts live GTA 6 streams every
 # 15 min, writes to the /data volume) and the read-only web dashboard
 # on https://vice-city-vibes-clipper.fly.dev — see src/clipper/app/run_fly.py.
@@ -39,6 +40,6 @@ primary_region = 'dfw'
   destination = '/data'
 
 [[vm]]
-  memory = '512mb'
+  memory = '1gb'
   cpu_kind = 'shared'
   cpus = 1
