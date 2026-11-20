@@ -50,6 +50,11 @@ image = (
         "numpy>=1.26",
         "fastapi[standard]>=0.110",
         "pydantic>=2.0",
+        # CUDA libs: debian_slim + pip install ships no cuBLAS, so
+        # faster-whisper on CUDA died with "libcublas.so.12 is not
+        # found" even in a real T4 worker (2026-11-20, call
+        # fc-01M7VP40NWCJAT2RX7DFY8YRJH). nvidia-cublas-cu12 ships it.
+        "nvidia-cublas-cu12",
     )
 )
 
