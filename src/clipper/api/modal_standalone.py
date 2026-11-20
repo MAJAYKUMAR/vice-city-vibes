@@ -197,9 +197,21 @@ def cut_clip(source, start, end, hook="", title=""):
         td = Path(td)
         src = td / "source.mp4"
         # Download only the window (+5s headroom for the transcribe).
+        # BUG (found 2026-11-20, proved locally): the section file is
+        # only ~25s long starting at section_start, but EVERYTHING
+        # downstream used ABSOLUTE VOD timestamps against it — ffmpeg
+        # `-ss 7262 -to 7281` on a 25s file seeks past EOF and exits 0
+        # producing a 261-byte empty MP4, whisper word times are
+        # relative to the section, and the safety check samples frames
+        # at 7262s that don't exist (always SAFE). All downstream
+        # times must be RELATIVE to section_start.
+        section_start = max(0.0, start - 5)
+        offset = start - section_start          # 5.0 normally
+        rel_end = end - section_start           # offset + clip length
+        duration = end - start
         r = subprocess.run(
             ["yt-dlp", "-f", "bestvideo[height<=1080]+bestaudio/best",
-             "--download-sections", f"*{max(0.0, start - 5):.1f}-{end + 1:.1f}",
+             "--download-sections", f"*{section_start:.1f}-{end + 1:.1f}",
              "-o", str(src), source],
             capture_output=True, text=True, timeout=600)
         if r.returncode != 0 or not src.exists():
@@ -210,6 +222,8 @@ def cut_clip(source, start, end, hook="", title=""):
                 capture_output=True, text=True, timeout=900)
             if r.returncode != 0 or not src.exists():
                 raise RuntimeError(f"download failed: {(r.stderr or '')[-500:]}")
+            # Full file: absolute timestamps are correct again.
+            section_start, offset, rel_end = 0.0, start, end
         # Transcribe on CPU: the GPU container has no loadable cuBLAS
         # after 3 attempts (libcublas.so.12), so CUDA transcribe fails.
         # tiny-model CPU transcribe is ~10-20s for a 20s clip; ffmpeg
@@ -221,21 +235,32 @@ def cut_clip(source, start, end, hook="", title=""):
         words = [{"w": w.word.strip(), "s": round(w.start, 2),
                   "e": round(w.end, 2)}
                  for s in segs for w in (s.words or [])]
-        safety = _safety_check(src, start, end, words)
+        safety = _safety_check(src, offset, rel_end, words)
         ass = td / "clip.ass"
-        _build_ass(words, start, end, hook, ass)
+        _build_ass(words, offset, rel_end, hook, ass)
         out = td / "clip_fill.mp4"
         vf = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
               f"crop=1080:1920,setsar=1,fps=30,subtitles='{ass}'[vo]")
         subprocess.run(
             ["ffmpeg", "-y", "-v", "error",
-             "-ss", f"{start:.2f}", "-to", f"{end:.2f}", "-i", str(src),
+             "-ss", f"{offset:.2f}", "-t", f"{duration:.2f}", "-i", str(src),
              "-filter_complex", vf, "-map", "[vo]", "-map", "0:a?",
              "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
              "-c:v", "libx264", "-preset", "medium", "-crf", "18",
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
              "-ar", "48000", "-movflags", "+faststart", str(out)],
             check=True, timeout=600)
+        # Fail loudly on an empty encode: ffmpeg exits 0 even when a
+        # seek past EOF produces a stream-less file (the 261-byte
+        # false-200 of 2026-11-20). Never return that as a clip.
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+             "-of", "csv=p=0", str(out)],
+            capture_output=True, text=True)
+        if "video" not in probe.stdout:
+            raise RuntimeError(
+                f"encode produced no video stream (out={out.stat().st_size}B, "
+                f"offset={offset:.2f}, duration={duration:.2f})")
         return out.read_bytes(), safety
 
 
