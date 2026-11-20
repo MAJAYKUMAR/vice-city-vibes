@@ -34,6 +34,7 @@ posting of its own.
 import os
 
 import modal
+from fastapi import Request  # must be a real type: FastAPI injects it; a string annotation breaks /cut with 422
 
 APP_NAME = "vice-city-vibes-cutter"
 
@@ -215,11 +216,14 @@ def cut_clip(source, start, end, hook="", title=""):
 
 @app.function(image=image, gpu="T4", timeout=1200, scaledown_window=300)
 @modal.fastapi_endpoint(method="POST")
-def cut(item: dict, request: "Request"):
+def cut(item: dict, request: Request):
     """POST /cut — JSON {source, start, end, hook, title}.
     Returns the mp4 bytes with X-Safety-Verdict / X-Duration-S headers.
     Auth: when the env var MODAL_SHARED_SECRET is set on the Modal app,
-    the request must carry header X-Clipper-Auth with that value."""
+    the request must carry header X-Clipper-Auth with that value.
+    NOTE: `request` MUST be the real fastapi.Request type (imported at
+    module level). A string annotation "Request" makes FastAPI treat it
+    as a required query parameter -> 422 on every call (found 2026-11-20)."""
     from fastapi import Response
 
     secret = os.environ.get("MODAL_SHARED_SECRET", "")
