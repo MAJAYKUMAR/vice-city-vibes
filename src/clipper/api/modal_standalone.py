@@ -18,6 +18,13 @@ Endpoints (after deploy, Modal prints the URLs):
                    X-Duration-S, X-Title. Safety BLOCK is still
                    returned (format proof) — the caller must never
                    approve/post a BLOCK clip.
+                   Optional `track` (alias `crop_keyframes`): crop
+                   keyframes [[t_rel, x_px], ...] from the CPU path
+                   (clip.py crop_keyframes JSON) — the cut follows them
+                   instead of computing its own track. Without it the
+                   cutter computes a lightweight motion track on the
+                   downloaded section; if that fails it falls back to
+                   a static centre crop. A cut never fails for tracking.
     GET  /health — {"status": "ok", "app": "vice-city-vibes-cutter"}
 
 Auth: if the env var MODAL_SHARED_SECRET is set on the Modal app,
@@ -84,6 +91,92 @@ HARD_CLASSES = {
     "MALE_GENITALIA_EXPOSED", "ANUS_EXPOSED",
 }
 KEYWORDS = ("shower", "bath", "naked", "nude", "butt", "strip", "undress")
+
+
+# Tracked reframe (OpusClip parity, workstream B): the GPU cutter no
+# longer centre-crops. clipper.core.track holds the shared crop math
+# (pure functions + a lightweight motion tracker, stdlib-only at import
+# time). If Modal ever deploys this file WITHOUT the sibling module
+# (this file was historically self-contained), the import below fails
+# and the small local fallbacks take over: caller-supplied tracks and
+# the centre crop still work, only in-cutter track computation is lost
+# (it then falls back to centre — never a failed cut).
+try:
+    from clipper.core.track import (  # noqa: F401
+        build_fill_filter as _tracked_filter,
+        centre_x as _centre_x,
+        crop_x_expr as _crop_x_expr,
+        normalize_keyframes as _normalize_keyframes,
+        plan_crop as _plan_crop,
+        scaled_width as _scaled_width,
+    )
+    _TRACK_AVAILABLE = True
+except Exception:
+    _TRACK_AVAILABLE = False
+    _W, _H = 1080, 1920
+
+    def _scaled_width(sw, sh):
+        w = int(sw * _H / sh)
+        return w // 2 * 2
+
+    def _centre_x(sw, sh):
+        return max(0, _scaled_width(sw, sh) - _W) // 2 // 2 * 2
+
+    def _crop_x_expr(keyframes):
+        keys = sorted(keyframes)
+        if len(keys) == 1:
+            return str(keys[0][1])
+        expr = str(keys[-1][1])
+        for i in range(len(keys) - 2, -1, -1):
+            t0, x0 = keys[i]
+            t1, x1 = keys[i + 1]
+            if t1 <= t0:
+                continue
+            seg = f"({x0}+({x1}-{x0})*(t-{t0})/({t1}-{t0}))"
+            expr = f"if(lt(t,{t1}),{seg},{expr})"
+        return expr
+
+    def _normalize_keyframes(keyframes, duration, sw, sh):
+        import math as _math
+        if keyframes is None:
+            return None
+        if isinstance(keyframes, dict):
+            if "keyframes" in keyframes:
+                keyframes = keyframes["keyframes"]
+            elif "x" in keyframes:
+                keyframes = [(0.0, keyframes["x"])]
+            else:
+                return None
+        if isinstance(keyframes, (int, float)):
+            keyframes = [(0.0, keyframes)]
+        max_x = max(0, _scaled_width(sw, sh) - _W)
+        keys = []
+        try:
+            for k in keyframes:
+                t, x = (float(k["t"]), float(k["x"])) if isinstance(k, dict) else (float(k[0]), float(k[1]))
+                if not (_math.isfinite(t) and _math.isfinite(x)):
+                    continue
+                keys.append((round(max(0.0, min(float(duration), t)), 2),
+                             int(max(0, min(max_x, x)) // 2 * 2)))
+        except (TypeError, ValueError, IndexError, KeyError):
+            return None
+        if not keys:
+            return None
+        keys.sort()
+        if keys[0][0] > 0:
+            keys.insert(0, (0.0, keys[0][1]))
+        if keys[-1][0] < float(duration) - 0.5:
+            keys.append((round(float(duration), 2), keys[-1][1]))
+        return keys
+
+    def _tracked_filter(sw, sh, keyframes, ass_path):
+        x_expr = _crop_x_expr(keyframes).replace(",", "\\,")
+        sub = str(ass_path).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        return (f"[0:v]scale={_scaled_width(sw, sh)}:{_H},crop={_W}:{_H}:{x_expr}:0,"
+                f"setsar=1,fps=30,subtitles='{sub}'[vo]")
+
+    _plan_crop = None  # in-cutter tracking unavailable without track.py
+
 
 
 def _build_ass(words, start, end, hook, path):
@@ -178,11 +271,82 @@ def _safety_check(video_path, start, end, words):
     return verdict
 
 
-@app.function(image=image, gpu="T4", timeout=1200, scaledown_window=300)
-def cut_clip(source, start, end, hook="", title=""):
+def _probe_size(video_path):
+    """Source width/height via ffprobe (defaults 1280x720 on failure)."""
+    import json
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "json",
+             str(video_path)],
+            capture_output=True, text=True, timeout=30)
+        s = json.loads(r.stdout)["streams"][0]
+        return int(s["width"]), int(s["height"])
+    except Exception:
+        return 1280, 720
+
+
+def _resolve_crop(src, clip_start, clip_end, supplied_track):
+    """Pick the crop keyframes for one cut window.
+
+    `clip_start`/`clip_end` are RELATIVE to the downloaded section
+    file (the same relative times the transcribe/safety/encode steps
+    use); returned keyframe times are relative to the CLIP start, so
+    ffmpeg filter time t=0 is the first keyframe. Priority:
+      1. caller-supplied track (CPU path crop_keyframes) if it validates;
+      2. lightweight in-cutter motion track (track.plan_crop, ~2 fps on
+         64x36 frames — cheap on GPU time);
+      3. static centre crop — NEVER raises, never fails the cut.
+    Returns (keyframes [(t_rel, x_px), ...], mode str, src_w, src_h).
+    """
+    import math
+
+    duration = clip_end - clip_start
+    sw, sh = _probe_size(src)
+    centre = [(0.0, _centre_x(sw, sh))]
+    if supplied_track is not None:
+        try:
+            keys = _normalize_keyframes(supplied_track, duration, sw, sh)
+        except Exception:
+            keys = None
+        if keys:
+            print(f"[cut] crop=tracked-supplied {len(keys)} keyframes "
+                  f"x {keys[0][1]}..{max(x for _, x in keys)} "
+                  f"(centre would be {centre[0][1]})", flush=True)
+            return keys, "tracked-supplied", sw, sh
+        print("[cut] crop: supplied track unusable — computing track",
+              flush=True)
+    if _TRACK_AVAILABLE and _plan_crop is not None:
+        try:
+            plan = _plan_crop(src, clip_start, clip_end, sample_fps=2)
+            keys = plan["keyframes"]
+            if keys and any(math.isfinite(x) for _, x in keys):
+                print(f"[cut] crop=tracked-computed {len(keys)} keyframes "
+                      f"x {keys[0][1]}..{max(x for _, x in keys)} "
+                      f"(centre would be {centre[0][1]})", flush=True)
+                return keys, "tracked-computed", sw, sh
+        except Exception as e:
+            print(f"[cut] crop: track computation failed ({e}) — centre fallback",
+                  flush=True)
+    else:
+        print("[cut] crop: in-cutter tracking unavailable — centre fallback",
+              flush=True)
+    print(f"[cut] crop=centre x={centre[0][1]}", flush=True)
+    return centre, "centre", sw, sh
+
+
+@app.function(image=image, gpu="T4", timeout=1200, scaledown_window=300, max_containers=1)
+def cut_clip(source, start, end, hook="", title="", track=None):
     """Cut one clip on GPU. Returns (mp4_bytes, safety_verdict_dict).
     `source` is a URL (VOD / own footage) or a Modal Volume path.
-    Kept as a plain function so it can also be called from Python
+    `track` is optional crop keyframes [[t_rel, x_px], ...] (clip.py
+    crop_keyframes JSON, times relative to the clip start) — when
+    supplied and valid the cut follows them; otherwise the cutter
+    computes a lightweight motion track on the downloaded section and
+    falls back to a static centre crop if that fails. Kept as a plain
+    function so it can also be called from Python
     (`modal run modal_app.py::cut_clip`) for testing."""
     import subprocess
     import tempfile
@@ -256,8 +420,14 @@ def cut_clip(source, start, end, hook="", title=""):
         ass = td / "clip.ass"
         _build_ass(words, offset, rel_end, hook, ass)
         out = td / "clip_fill.mp4"
-        vf = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-              f"crop=1080:1920,setsar=1,fps=30,subtitles='{ass}'[vo]")
+        # Tracked full-fill 9:16 crop (workstream B): follow the
+        # caller-supplied track, else compute a lightweight motion
+        # track on the section, else static centre crop — never fail
+        # the cut for tracking. Keyframe times are relative to the
+        # clip start, matching ffmpeg filter time (t=0 at -ss offset).
+        keyframes, crop_mode, sw, sh = _resolve_crop(
+            src, offset, rel_end, track)
+        vf = _tracked_filter(sw, sh, keyframes, ass)
         # Encode on the GPU (NVENC) when the T4 exposes it; libx264
         # (CPU) only as a fallback. NVENC is what makes the GPU cut
         # fast — libx264 on a GPU container is just CPU encode.
@@ -294,10 +464,15 @@ def cut_clip(source, start, end, hook="", title=""):
         return out.read_bytes(), safety
 
 
-@app.function(image=image, gpu="T4", timeout=1200, scaledown_window=300)
+@app.function(image=image, gpu="T4", timeout=1200, scaledown_window=300, max_containers=1)
 @modal.fastapi_endpoint(method="POST")
 def cut(item: dict, request: Request):
     """POST /cut — JSON {source, start, end, hook, title}.
+    Optional `track` (alias `crop_keyframes`): crop keyframes
+    [[t_rel, x_px], ...] from the CPU path — the cut follows them;
+    without it the cutter computes its own lightweight motion track,
+    falling back to centre crop. All fields except source/start/end
+    are optional; adding `track` changes nothing for old callers.
     Returns the mp4 bytes with X-Safety-Verdict / X-Duration-S headers.
     Auth: when the env var MODAL_SHARED_SECRET is set on the Modal app,
     the request must carry header X-Clipper-Auth with that value.
@@ -313,7 +488,8 @@ def cut(item: dict, request: Request):
     start, end = float(item.get("start", 0)), float(item.get("end", 0))
     hook = item.get("hook", "")
     title = item.get("title", "")
-    data, safety = cut_clip.remote(source, start, end, hook, title)
+    track = item.get("track", item.get("crop_keyframes"))
+    data, safety = cut_clip.remote(source, start, end, hook, title, track)
     return Response(
         content=data, media_type="video/mp4",
         headers={
