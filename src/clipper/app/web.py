@@ -121,6 +121,40 @@ def _thumb_img(r, cls="thumb-img", alt=""):
     return (f'<img class="{cls}" src="{html.escape(t, quote=True)}" '
             f'alt="{html.escape(alt or r.get("channel") or "stream", quote=True)}" loading="lazy">')
 
+
+def _embed_url(r):
+    """Live player URL for a stream row: YouTube embed, or Twitch
+    player embed. Empty string when unresolvable (caller falls back
+    to the static thumbnail)."""
+    url = (r.get("url") or "")
+    plat = (r.get("platform") or "").lower()
+    if "twitch" in plat:
+        login = (r.get("channel") or "").strip().lower()
+        if login:
+            return ("https://player.twitch.tv/?channel=" + login +
+                    "&parent=vice-city-vibes-clipper.fly.dev&parent=localhost"
+                    "&muted=true&autoplay=true")
+        return ""
+    m = re.search(r"[?&]v=([A-Za-z0-9_-]{11})", url)
+    if m:
+        return (f"https://www.youtube.com/embed/{m.group(1)}"
+                "?autoplay=1&mute=1&playsinline=1")
+    return ""
+
+
+def _pick_media(top):
+    """Auto-pilot top pick: live embedded player when possible,
+    static thumbnail link otherwise. Badges stay on both."""
+    emb = _embed_url(top)
+    badges = ('<span class="live-badge">● LIVE</span>'
+              f'<span class="viewers-badge">{top.get("viewers") or ""} watching</span>')
+    if emb:
+        return (f'<div class="pick-player"><iframe src="{html.escape(emb, quote=True)}" '
+                'allow="autoplay; fullscreen" allowfullscreen '
+                'title="Live stream preview"></iframe>' + badges + '</div>')
+    return (f'<a class="thumb pick-thumb" href="{_esc(top.get("url"))}" '
+            f'target="_blank" rel="noopener">{_thumb_img(top)}' + badges + '</a>')
+
 def _modal_status():
     cut_url = os.environ.get("MODAL_CUT_URL", "").strip()
     if not cut_url:
@@ -430,6 +464,8 @@ background:radial-gradient(circle,rgba(255,209,102,.55),transparent 70%)}
 .stream-title{display:block;color:#e9d5ff;font-size:14px;line-height:1.35;margin:4px 0 8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:38px}
 .pick-thumb{border-radius:14px;margin-bottom:12px}
 .pick-thumb img{border-radius:14px}
+.pick-player{position:relative;aspect-ratio:16/9;background:#0a0514;border-radius:14px;overflow:hidden;margin-bottom:12px}
+.pick-player iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 .mw-thumb{flex:0 0 160px;display:block;border-radius:10px;overflow:hidden;aspect-ratio:16/9;background:#0a0514}
 .mw-thumb img{width:100%;height:100%;object-fit:cover;display:block}
 @media(max-width:640px){.mw-thumb{flex-basis:110px}}
@@ -470,7 +506,7 @@ background:radial-gradient(circle,rgba(255,209,102,.55),transparent 70%)}
 <div class="grid">
 <div class="card"><span class="secnum">03 · Auto-pilot</span><h2>🤖 Auto-pilot <span class="grad">top pick</span></h2>
 <p class="lede">The scout picks the busiest stream — the engine watches it. <span class="rec">● REC</span></p>
-{_esc(top.get("channel")) and f'<a class="thumb pick-thumb" href="{_esc(top.get("url"))}" target="_blank" rel="noopener">{_thumb_img(top)}<span class="live-badge">● LIVE</span><span class="viewers-badge">{top.get("viewers") or ""} watching</span></a><div class="pick-name">{_esc(top.get("channel"))}</div><span class="stars">{stars(top_hype)}</span> <b>{top_hype}% hype</b><p class="pick-meta">{_esc(top.get("platform"))} · {top.get("viewers") or ""} viewers</p><p>{_esc(top.get("title"))}</p><p><a href="{_esc(top.get("url"))}" target="_blank" rel="noopener">Watch the stream ↗</a></p>' or '<p class="dim">No live pick right now.</p>'}
+{_esc(top.get("channel")) and f'{_pick_media(top)}<div class="pick-name">{_esc(top.get("channel"))}</div><span class="stars">{stars(top_hype)}</span> <b>{top_hype}% hype</b><p class="pick-meta">{_esc(top.get("platform"))} · {top.get("viewers") or ""} viewers</p><p>{_esc(top.get("title"))}</p><p><a href="{_esc(top.get("url"))}" target="_blank" rel="noopener">Watch the stream ↗</a></p>' or '<p class="dim">No live pick right now.</p>'}
 <p class="pick-meta">Checked: {_esc(s.get("checked_at"))} · {s["youtube_live"]} YouTube live · {s["twitch_live"]} Twitch live</p></div>
 <div class="card"><span class="secnum">Status</span><h2>⚡ <span class="grad">Status</span></h2>
 <p class="lede">Fly watcher + GPU cutter, at a glance.</p>
