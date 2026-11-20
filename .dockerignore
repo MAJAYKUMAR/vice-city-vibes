@@ -1,0 +1,16 @@
+# Docker build context is clipper-engine/ — keep test data and local
+# tooling out of the Fly image.
+__pycache__/
+*.pyc
+fly/bin/
+fly/tmp/
+modal-venv/
+jobs/
+test-real/
+clips/
+qc/
+dashboard/
+garage/
+clipit-eval/
+openshorts-eval/
+.git/

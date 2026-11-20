@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+modal-venv/
+.venv/
+jobs/
+test-real/
+clips/
+models/
+qc/
+*.mp4
+*.jpg
+*.png
+*.webp
+fly/tmp/
+fly/bin/
