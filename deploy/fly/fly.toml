@@ -1,9 +1,12 @@
-# vice-city-vibes-clipper — Clipper Engine watcher on Fly.io
+# vice-city-vibes-clipper — Clipper Engine watcher + web dashboard on Fly.io
 # App: vice-city-vibes-clipper, shared-cpu-1x, 512MB RAM (~$3.19/month,
 # under the $5 personal-org waiver, so $0 while the bill stays under $5).
-# Worker only: no http_service, no public URL — it scouts live GTA 6
-# streams in a loop and writes results to the /data volume. It never
-# records, cuts or posts anything on its own (Vice City Vibes Rule 2/11).
+# One machine runs BOTH: the watcher (scouts live GTA 6 streams every
+# 15 min, writes to the /data volume) and the read-only web dashboard
+# on https://vice-city-vibes-clipper.fly.dev — see src/clipper/app/run_fly.py.
+# The watcher must NOT stop when the web service is added: auto_stop_machines
+# is off and min_machines_running is 1, and run_fly restarts the watcher
+# child if it ever exits.
 app = 'vice-city-vibes-clipper'
 primary_region = 'dfw'
 
@@ -15,12 +18,21 @@ primary_region = 'dfw'
 [env]
   CLIPPER_WHISPER_MODEL = 'tiny'
   PYTHONUNBUFFERED = '1'
+  PORT = '8080'
   # Modal integration (opt-in, default OFF — watcher stays scouting-only):
   # CLIPPER_MODAL_CHECK = '1' logs whether the top pick is cuttable.
   # MODAL_CUT_URL is NOT set here — set it as a Fly secret after
   # `modal deploy modal_app.py` prints the /cut URL:
   #   flyctl secrets set MODAL_CUT_URL=https://...-cut.modal.run
   CLIPPER_MODAL_CHECK = '0'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
 
 [mounts]
   source = 'clipper_data'

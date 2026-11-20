@@ -26,6 +26,7 @@ where = ["src"]
 
 [project.scripts]
 clipper-dashboard = "clipper.app.dashboard:main"
+clipper-web = "clipper.app.web:main"
 clipper-autopilot = "clipper.app.autopilot:main"
 clipper-watcher = "clipper.app.watcher:main"
 clipper-garage = "clipper.app.garage:main"

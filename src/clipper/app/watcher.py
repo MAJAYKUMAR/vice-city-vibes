@@ -87,6 +87,9 @@ def run_cycle():
                 src = HERE / "dashboard" / name
                 if src.exists():
                     shutil.copy2(src, DATA / name)
+            clips = HERE / "garage" / "clips.json"
+            if clips.exists():
+                shutil.copy2(clips, DATA / "clips.json")
             log("dashboard outputs copied to /data")
     except OSError as e:
         log(f"copy to /data failed: {e}")

@@ -21,6 +21,8 @@ Layered, not flat — the code lives in `src/clipper/`, deploy configs in `deplo
 │   │   ├── dashboard.py       # Stream Dashboard — top live GTA 6 streams
 │   │   ├── autopilot.py       # Auto-pilot — picks the best stream to scout
 │   │   ├── watcher.py         # Fly watcher — scouts every 15 min, never posts
+│   │   ├── web.py             # Personal web dashboard (read-only, stdlib only)
+│   │   ├── run_fly.py         # Fly entrypoint — watcher + web in one machine
 │   │   └── garage.py          # Video Garage — clip index + approve/export
 │   ├── core/                  # domain logic
 │   │   ├── clip.py            # scout / cut / manual / hype / export / polish
@@ -98,6 +100,28 @@ python -m clipper.app.garage approve jobs/<id>/edits/clip_1.mp4
 
 Or install it once (`pip install -e .`) and use the console scripts: `clipper-dashboard`, `clipper-clip`, `clipper-garage`, `clipper-watcher`, `clipper-autopilot`, `clipper-modal-client`.
 
+## Web dashboard (personal view, not for sale)
+
+`https://vice-city-vibes-clipper.fly.dev` — a single-page, read-only
+dashboard served by the same Fly machine as the watcher
+(`src/clipper/app/web.py`, stdlib only, no new dependencies; entrypoint
+`src/clipper/app/run_fly.py` runs watcher + web together, and restarts
+the watcher if it exits, so adding the web service never stops scouting).
+Neon Vice City styling (pink/purple sunset gradient, no Rockstar logo,
+no Lucia/Jason likeness). Shows: live GTA 6 streams now with a Hype
+Meter, auto-pilot top pick, Most Wanted trends, Video Garage clips with
+safety verdicts, watcher status/last run, Modal cutter status, Fly
+machine status. Data comes from the `/data` volume (watcher.log,
+streams.json, trends.md, clips.json) with a local repo fallback.
+
+**Read-only, no auth yet:** there are no buttons that record, cut or
+post anything — posting still needs Ajay's approval of the exact clip
+(Rule 1). Keep the URL private; do not share it publicly, and do not
+add posting actions without auth + approval.
+
+Local test: `PYTHONPATH=src python -m clipper.app.web --port 8080`,
+then open http://localhost:8080/ and /api/state.
+
 ## Fly → Modal (GPU cutting)
 
 1. Deploy the cutter: `modal deploy src/clipper/api/modal_app.py --profile maddukuriajaykumar05`
@@ -111,3 +135,20 @@ Or install it once (`pip install -e .`) and use the console scripts: `clipper-da
 
 - Fly (watcher, CPU, always-on): from the repo root — `flyctl deploy --config deploy/fly/fly.toml --dockerfile deploy/fly/Dockerfile`
 - Modal (GPU cutter, on demand): `modal deploy src/clipper/api/modal_app.py` with the `maddukuriajaykumar05` profile (self-contained cutter: `modal deploy modal_app.py`, the root shim)
+
+### GitHub Actions — the reliable deploy route
+
+`.github/workflows/deploy-fly.yml` deploys the watcher to Fly on every push
+to `main` that touches `deploy/fly/**`, `src/**`, or the workflow itself, and
+can also be run manually (Actions > Deploy watcher to Fly > Run workflow).
+It also builds and pushes the image to
+`ghcr.io/MAJAYKUMAR/vice-city-vibes-clipper:<commit-sha>` (plus `:latest`),
+so the image is available even if the Fly step is skipped. This is the
+reliable route because deploying directly from the dev VM kept failing
+(Fly token scope / Depot builder hangs).
+
+Required secret, set once before the workflow can deploy:
+**Settings > Secrets and variables > Actions > `FLY_API_TOKEN`** — a Fly
+Personal Access Token (fly.io dashboard > account > Tokens). Without it,
+the Fly step fails; the GHCR image step still runs. Never put a token value
+in the workflow file or any file in the repo.

@@ -29,6 +29,7 @@ COPY src/clipper/infra/gtavi/ /home/clipper/workspace/gta-test/gtavi-claudecode/
 COPY pyproject.toml ./
 COPY src/ ./src/
 
-# Watcher loop only: dashboard + autopilot, every 15 min.
+# Watcher loop + web dashboard in one machine (run_fly.py):
+# watcher scouts every 15 min, web serves the dashboard on $PORT.
 # Never records, cuts or posts (Vice City Vibes Rule 2/11).
-CMD ["python", "-m", "clipper.app.watcher"]
+CMD ["python", "-m", "clipper.app.run_fly"]
