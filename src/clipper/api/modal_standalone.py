@@ -47,6 +47,8 @@ image = (
         "nudenet==3.4.2",
         "onnxruntime>=1.17",
         "numpy>=1.26",
+        "fastapi[standard]>=0.110",
+        "pydantic>=2.0",
     )
 )
 

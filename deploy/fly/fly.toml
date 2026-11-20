@@ -10,7 +10,7 @@ primary_region = 'dfw'
 [build]
   # Deploy from the repo root:
   #   flyctl deploy --config deploy/fly/fly.toml --dockerfile deploy/fly/Dockerfile
-  dockerfile = "deploy/fly/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   CLIPPER_WHISPER_MODEL = 'tiny'
