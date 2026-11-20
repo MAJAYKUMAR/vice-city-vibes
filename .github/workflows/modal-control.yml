@@ -1,0 +1,33 @@
+name: Modal cutter control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "deploy or stop"
+        required: true
+        default: "stop"
+        type: choice
+        options:
+          - stop
+          - deploy
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Modal CLI
+        run: pip install modal
+      - name: Stop cutter
+        if: inputs.action == 'stop'
+        run: modal app stop vice-city-vibes-cutter --yes
+      - name: Deploy cutter
+        if: inputs.action == 'deploy'
+        run: modal deploy modal_app.py
