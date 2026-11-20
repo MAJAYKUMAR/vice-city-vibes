@@ -210,9 +210,12 @@ def cut_clip(source, start, end, hook="", title=""):
                 capture_output=True, text=True, timeout=900)
             if r.returncode != 0 or not src.exists():
                 raise RuntimeError(f"download failed: {(r.stderr or '')[-500:]}")
-        # Transcribe on GPU (faster-whisper tiny, float16 on CUDA).
+        # Transcribe on CPU: the GPU container has no loadable cuBLAS
+        # after 3 attempts (libcublas.so.12), so CUDA transcribe fails.
+        # tiny-model CPU transcribe is ~10-20s for a 20s clip; ffmpeg
+        # encode still runs on the GPU container.
         from faster_whisper import WhisperModel
-        model = WhisperModel("tiny", device="cuda", compute_type="float16")
+        model = WhisperModel("tiny", device="cpu", compute_type="int8")
         segs, _ = model.transcribe(str(src), word_timestamps=True,
                                    vad_filter=True)
         words = [{"w": w.word.strip(), "s": round(w.start, 2),
