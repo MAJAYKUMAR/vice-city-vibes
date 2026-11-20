@@ -54,9 +54,23 @@ image = (
         # CUDA libs: debian_slim + pip install ships no cuBLAS, so
         # faster-whisper on CUDA died with "libcublas.so.12 is not
         # found" even in a real T4 worker (2026-11-20, call
-        # fc-01M7VP40NWCJAT2RX7DFY8YRJH). nvidia-cublas-cu12 ships it.
+        # fc-01M7VP40NWCJAT2RX7DFY8YRJH). The wheels ship the libs,
+        # but pip does NOT put them on the loader path — that was the
+        # real bug (the wheel alone changed nothing). LD_LIBRARY_PATH
+        # below points at the wheel lib dirs, and cuDNN + the CUDA
+        # runtime wheels are included (ctranslate2 needs all three).
         "nvidia-cublas-cu12",
+        "nvidia-cudnn-cu12",
+        "nvidia-cuda-runtime-cu12",
     )
+    .env({
+        "LD_LIBRARY_PATH": "/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:"
+                           "/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:"
+                           "/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib",
+        # Silence the unauthenticated-HF-Hub warning path; the tiny
+        # model still downloads without a token.
+        "HF_HUB_DISABLE_PROGRESS_BARS": "1",
+    })
 )
 
 app = modal.App(APP_NAME)
@@ -224,32 +238,48 @@ def cut_clip(source, start, end, hook="", title=""):
                 raise RuntimeError(f"download failed: {(r.stderr or '')[-500:]}")
             # Full file: absolute timestamps are correct again.
             section_start, offset, rel_end = 0.0, start, end
-        # Transcribe on CPU: the GPU container has no loadable cuBLAS
-        # after 3 attempts (libcublas.so.12), so CUDA transcribe fails.
-        # tiny-model CPU transcribe is ~10-20s for a 20s clip; ffmpeg
-        # encode still runs on the GPU container.
+        # Transcribe on the GPU: CUDA + float16. The earlier CPU
+        # fallback was only because libcublas wasn't on the loader
+        # path — fixed above with LD_LIBRARY_PATH, so CUDA is tried
+        # first and a failure now raises loudly instead of silently
+        # falling back to CPU.
         from faster_whisper import WhisperModel
-        model = WhisperModel("tiny", device="cpu", compute_type="int8")
+        print(f"[cut] source={src} size={src.stat().st_size}B", flush=True)
+        model = WhisperModel("tiny", device="cuda", compute_type="float16")
         segs, _ = model.transcribe(str(src), word_timestamps=True,
                                    vad_filter=True)
         words = [{"w": w.word.strip(), "s": round(w.start, 2),
                   "e": round(w.end, 2)}
                  for s in segs for w in (s.words or [])]
+        print(f"[cut] transcribed {len(words)} words (cuda)", flush=True)
         safety = _safety_check(src, offset, rel_end, words)
         ass = td / "clip.ass"
         _build_ass(words, offset, rel_end, hook, ass)
         out = td / "clip_fill.mp4"
         vf = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
               f"crop=1080:1920,setsar=1,fps=30,subtitles='{ass}'[vo]")
+        # Encode on the GPU (NVENC) when the T4 exposes it; libx264
+        # (CPU) only as a fallback. NVENC is what makes the GPU cut
+        # fast — libx264 on a GPU container is just CPU encode.
+        enc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True)
+        use_nvenc = "h264_nvenc" in enc.stdout
+        print(f"[cut] encoder={'h264_nvenc (GPU)' if use_nvenc else 'libx264 (CPU fallback)'}",
+              flush=True)
+        v_args = (["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19"]
+                  if use_nvenc else
+                  ["-c:v", "libx264", "-preset", "medium", "-crf", "18"])
         subprocess.run(
             ["ffmpeg", "-y", "-v", "error",
              "-ss", f"{offset:.2f}", "-t", f"{duration:.2f}", "-i", str(src),
              "-filter_complex", vf, "-map", "[vo]", "-map", "0:a?",
              "-af", "loudnorm=I=-14:TP=-1.5:LRA=11",
-             "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+             *v_args,
              "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
              "-ar", "48000", "-movflags", "+faststart", str(out)],
             check=True, timeout=600)
+        print(f"[cut] encoded {out.stat().st_size}B", flush=True)
         # Fail loudly on an empty encode: ffmpeg exits 0 even when a
         # seek past EOF produces a stream-less file (the 261-byte
         # false-200 of 2026-11-20). Never return that as a clip.
