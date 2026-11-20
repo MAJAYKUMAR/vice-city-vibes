@@ -98,6 +98,29 @@ def _hype(viewers):
     return max(1, min(100, int(12 * (v ** 0.5))))
 
 
+
+def _thumb(r):
+    """Live preview image for a stream row: Twitch live preview CDN,
+    or the YouTube video thumbnail. Empty string when unresolvable."""
+    url = (r.get("url") or "")
+    plat = (r.get("platform") or "").lower()
+    if "twitch" in plat:
+        login = (r.get("channel") or "").strip().lower()
+        if login:
+            return f"https://static-cdn.jtvnw.net/previews-ttv/live_user_{login}-640x360.jpg"
+        return ""
+    m = re.search(r"[?&]v=([A-Za-z0-9_-]{11})", url)
+    if m:
+        return f"https://i.ytimg.com/vi/{m.group(1)}/hqdefault.jpg"
+    return ""
+
+def _thumb_img(r, cls="thumb-img", alt=""):
+    t = _thumb(r)
+    if not t:
+        return '<div class="thumb-fallback">VICE CITY VIBES</div>'
+    return (f'<img class="{cls}" src="{html.escape(t, quote=True)}" '
+            f'alt="{html.escape(alt or r.get("channel") or "stream", quote=True)}" loading="lazy">')
+
 def _modal_status():
     cut_url = os.environ.get("MODAL_CUT_URL", "").strip()
     if not cut_url:
@@ -183,6 +206,7 @@ def render(state):
     for i, w in enumerate(wanted, 1):
         wanted_rows += (
             f'<div class="mw-row"><span class="mw-rank">{i:02d}</span>'
+            f'<a class="mw-thumb" href="{_esc(w.get("url"))}" target="_blank" rel="noopener">{_thumb_img(w)}</a>'
             f'<div class="mw-main"><a href="{_esc(w.get("url"))}" target="_blank" rel="noopener">'
             f'{_esc(w.get("title"))}</a>'
             f'<span class="mw-sub">{_esc(w.get("channel"))} · {_esc(w.get("views_per_hour"))} views/h</span></div>'
@@ -190,21 +214,22 @@ def render(state):
     if not wanted_rows:
         wanted_rows = '<p class="dim">No trend data yet — watcher refreshes every 15 min.</p>'
 
-    # ---- Live streams: ranked cards with stars + hype bar ----
+    # ---- Live streams: preview-image cards in a grid ----
     stream_cards = ""
     for i, r in enumerate(ranked, 1):
         plat = (_esc(r.get("platform")) or "").lower()
         plat_cls = "twitch" if "twitch" in plat else "youtube"
         stream_cards += (
-            f'<div class="stream-row"><span class="mw-rank">{i:02d}</span>'
-            f'<div class="stream-main"><span class="stream-name">{_esc(r.get("channel"))}</span>'
+            f'<div class="stream-card"><a class="thumb" href="{_esc(r.get("url"))}" target="_blank" rel="noopener">'
+            f'{_thumb_img(r)}<span class="live-badge">● LIVE</span>'
+            f'<span class="viewers-badge">{_esc(r.get("viewers"))} watching</span></a>'
+            f'<div class="stream-body"><span class="stream-name">{_esc(r.get("channel"))}</span>'
+            f'<span class="stream-title">{_esc(r.get("title"))}</span>'
             f'<span class="stream-sub"><span class="plat {plat_cls}">{_esc(r.get("platform"))}</span>'
-            f' · {_esc(r.get("viewers"))} watching · {_esc(r.get("title"))}</span>'
-            f'<span class="stars">{stars(r["hype"])}</span></div>'
-            f'<div class="hype-side"><span class="hype-num">{r["hype"]}%</span>'
-            f'<span class="hype-label">hype</span>'
-            f'<div class="hypebar"><i style="width:{r["hype"]}%"></i></div></div>'
-            f'<a class="watch-link" href="{_esc(r.get("url"))}" target="_blank" rel="noopener">Watch ↗</a></div>')
+            f' <span class="stars">{stars(r["hype"])}</span></span>'
+            f'<div class="hypebar"><i style="width:{r["hype"]}%"></i></div>'
+            f'<span class="hype-num">{r["hype"]}% hype</span> '
+            f'<a class="watch-link" href="{_esc(r.get("url"))}" target="_blank" rel="noopener">Watch ↗</a></div></div>')
     if not stream_cards:
         stream_cards = '<p class="dim">No live streams in the last watcher run.</p>'
 
@@ -390,6 +415,25 @@ background:radial-gradient(circle,rgba(255,209,102,.55),transparent 70%)}
 .clip-body{padding:10px 2px 0}
 .pick-name{text-shadow:0 0 30px rgba(255,46,136,.35)}
 
+
+/* --- rich stream previews: real thumbnails, not text rows --- */
+.stream-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.stream-card{background:var(--panel2);border:1px solid var(--line);border-radius:16px;overflow:hidden;transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.stream-card:hover{transform:translateY(-3px);border-color:#7b2ff7;box-shadow:0 16px 40px rgba(123,47,247,.28)}
+.thumb{position:relative;display:block;aspect-ratio:16/9;background:#0a0514;overflow:hidden}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .3s ease}
+.stream-card:hover .thumb img,.pick-thumb:hover img{transform:scale(1.05)}
+.thumb-fallback{display:flex;align-items:center;justify-content:center;height:100%;min-height:120px;font-weight:900;letter-spacing:2px;color:#ff7ad9;background:linear-gradient(135deg,#3b0a4e,#7a1e63 55%,#ff5e3a)}
+.live-badge{position:absolute;top:10px;left:10px;background:#dc2626;color:#fff;font-weight:800;font-size:11px;letter-spacing:1.5px;padding:3px 9px;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.5)}
+.viewers-badge{position:absolute;bottom:10px;left:10px;background:rgba(0,0,0,.65);color:#fff;font-weight:700;font-size:12px;padding:3px 9px;border-radius:999px}
+.stream-body{padding:14px 16px 16px}
+.stream-title{display:block;color:#e9d5ff;font-size:14px;line-height:1.35;margin:4px 0 8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:38px}
+.pick-thumb{border-radius:14px;margin-bottom:12px}
+.pick-thumb img{border-radius:14px}
+.mw-thumb{flex:0 0 160px;display:block;border-radius:10px;overflow:hidden;aspect-ratio:16/9;background:#0a0514}
+.mw-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+@media(max-width:640px){.mw-thumb{flex-basis:110px}}
+
 """
 
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
@@ -426,7 +470,7 @@ background:radial-gradient(circle,rgba(255,209,102,.55),transparent 70%)}
 <div class="grid">
 <div class="card"><span class="secnum">03 · Auto-pilot</span><h2>🤖 Auto-pilot <span class="grad">top pick</span></h2>
 <p class="lede">The scout picks the busiest stream — the engine watches it. <span class="rec">● REC</span></p>
-{_esc(top.get("channel")) and f'<div class="pick-name">{_esc(top.get("channel"))}</div><span class="stars">{stars(top_hype)}</span> <b>{top_hype}% hype</b><p class="pick-meta">{_esc(top.get("platform"))} · {top.get("viewers") or ""} viewers</p><p>{_esc(top.get("title"))}</p><p><a href="{_esc(top.get("url"))}" target="_blank" rel="noopener">Watch the stream ↗</a></p>' or '<p class="dim">No live pick right now.</p>'}
+{_esc(top.get("channel")) and f'<a class="thumb pick-thumb" href="{_esc(top.get("url"))}" target="_blank" rel="noopener">{_thumb_img(top)}<span class="live-badge">● LIVE</span><span class="viewers-badge">{top.get("viewers") or ""} watching</span></a><div class="pick-name">{_esc(top.get("channel"))}</div><span class="stars">{stars(top_hype)}</span> <b>{top_hype}% hype</b><p class="pick-meta">{_esc(top.get("platform"))} · {top.get("viewers") or ""} viewers</p><p>{_esc(top.get("title"))}</p><p><a href="{_esc(top.get("url"))}" target="_blank" rel="noopener">Watch the stream ↗</a></p>' or '<p class="dim">No live pick right now.</p>'}
 <p class="pick-meta">Checked: {_esc(s.get("checked_at"))} · {s["youtube_live"]} YouTube live · {s["twitch_live"]} Twitch live</p></div>
 <div class="card"><span class="secnum">Status</span><h2>⚡ <span class="grad">Status</span></h2>
 <p class="lede">Fly watcher + GPU cutter, at a glance.</p>
@@ -446,7 +490,7 @@ background:radial-gradient(circle,rgba(255,209,102,.55),transparent 70%)}
 
 <div class="card"><span class="secnum">02 · Stream Dashboard</span><h2>📺 Stream <span class="grad">Dashboard</span></h2>
 <p class="lede">Top GTA 6 live streams from Twitch and YouTube in one place — ranked by viewers and hype.</p>
-{stream_cards}
+<div class="stream-grid">{stream_cards}</div>
 <p class="dim">Scouting only — clipping needs own footage or a live paid campaign that allows that creator (Rule 2/11).</p></div>
 
 <div class="card"><span class="secnum">05 · Cutting Room</span><h2>✂️ Cutting <span class="grad">Room</span></h2>
