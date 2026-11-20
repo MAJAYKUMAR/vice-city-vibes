@@ -7,9 +7,15 @@ test-real/
 clips/
 models/
 qc/
+dashboard/
+garage/
 *.mp4
 *.jpg
 *.png
 *.webp
-fly/tmp/
-fly/bin/
+fly/
+deploy/fly/bin/
+deploy/fly/tmp/
+clipit-eval/
+openshorts-eval/
+*.muse-github-snapshot-sync.json

@@ -1,0 +1,1 @@
+{"_comment":"Live paid campaigns that explicitly allow clipping that creator. modal_client.py only cuts a creator listed here with allowed=true and an unexpired date, or a source in watchlist.json pinned/links (own footage). No campaign is live right now — add one only when a campaign actually allows that creator.","campaigns":[]}

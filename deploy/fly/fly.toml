@@ -1,0 +1,32 @@
+# vice-city-vibes-clipper — Clipper Engine watcher on Fly.io
+# App: vice-city-vibes-clipper, shared-cpu-1x, 512MB RAM (~$3.19/month,
+# under the $5 personal-org waiver, so $0 while the bill stays under $5).
+# Worker only: no http_service, no public URL — it scouts live GTA 6
+# streams in a loop and writes results to the /data volume. It never
+# records, cuts or posts anything on its own (Vice City Vibes Rule 2/11).
+app = 'vice-city-vibes-clipper'
+primary_region = 'dfw'
+
+[build]
+  # Deploy from the repo root:
+  #   flyctl deploy --config deploy/fly/fly.toml --dockerfile deploy/fly/Dockerfile
+  dockerfile = "deploy/fly/Dockerfile"
+
+[env]
+  CLIPPER_WHISPER_MODEL = 'tiny'
+  PYTHONUNBUFFERED = '1'
+  # Modal integration (opt-in, default OFF — watcher stays scouting-only):
+  # CLIPPER_MODAL_CHECK = '1' logs whether the top pick is cuttable.
+  # MODAL_CUT_URL is NOT set here — set it as a Fly secret after
+  # `modal deploy modal_app.py` prints the /cut URL:
+  #   flyctl secrets set MODAL_CUT_URL=https://...-cut.modal.run
+  CLIPPER_MODAL_CHECK = '0'
+
+[mounts]
+  source = 'clipper_data'
+  destination = '/data'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1

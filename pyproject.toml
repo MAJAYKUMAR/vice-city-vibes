@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vice-city-vibes-clipper"
+version = "0.2.0"
+description = "GTA 6 clipper for Vice City Vibes: watch live streams, find hype moments, cut vertical 9:16 Shorts/Reels."
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper>=1.1",
+    "numpy>=1.26",
+    "requests>=2.31",
+    "yt-dlp[default]>=2026.10.26",
+    "deep-translator>=1.11",
+    "edge-tts>=6.1",
+    "opencv-python-headless>=4.9",
+    "nudenet==3.4.2",
+    "onnxruntime>=1.17",
+    "scenedetect==0.7.3",
+    "auto-editor==29.3.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+clipper-dashboard = "clipper.app.dashboard:main"
+clipper-autopilot = "clipper.app.autopilot:main"
+clipper-watcher = "clipper.app.watcher:main"
+clipper-garage = "clipper.app.garage:main"
+clipper-clip = "clipper.core.clip:main"
+clipper-modal-client = "clipper.infra.modal_client:main"

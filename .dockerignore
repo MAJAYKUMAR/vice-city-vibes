@@ -2,8 +2,9 @@
 # tooling out of the Fly image.
 __pycache__/
 *.pyc
-fly/bin/
-fly/tmp/
+fly/
+deploy/fly/bin/
+deploy/fly/tmp/
 modal-venv/
 jobs/
 test-real/
