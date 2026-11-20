@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install Modal CLI
-        run: pip install modal
+        run: pip install modal "fastapi[standard]>=0.110" "pydantic>=2.0"
       - name: Stop cutter
         if: inputs.action == 'stop'
         run: modal app stop vice-city-vibes-cutter --yes
