@@ -32,6 +32,7 @@ allows that creator. This file performs no scouting, recording, or
 posting of its own.
 """
 import os
+import re
 
 import modal
 from fastapi import Request  # must be a real type: FastAPI injects it; a string annotation breaks /cut with 422
@@ -176,6 +177,16 @@ def cut_clip(source, start, end, hook="", title=""):
     start, end = float(start), float(end)
     if end - start < 3 or end - start > 60:
         raise ValueError("clip window must be 3-60s")
+    # Normalize bare IDs to full URLs before yt-dlp sees them: a bare
+    # ID is treated as a YouTube video ID, so "v2932305259" failed with
+    # "[youtube] v2932305259: This video is unavailable".
+    source = str(source).strip()
+    if not source.startswith("http"):
+        m = re.fullmatch(r"v?(\d+)", source)
+        if m:
+            source = f"https://www.twitch.tv/videos/{m.group(1)}"
+        elif re.fullmatch(r"[A-Za-z0-9_-]{11}", source):
+            source = f"https://www.youtube.com/watch?v={source}"
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         src = td / "source.mp4"
