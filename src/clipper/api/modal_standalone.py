@@ -233,7 +233,7 @@ def cut(item: dict, request: Request):
     start, end = float(item.get("start", 0)), float(item.get("end", 0))
     hook = item.get("hook", "")
     title = item.get("title", "")
-    data, safety = cut_clip.local(source, start, end, hook, title)
+    data, safety = cut_clip.remote(source, start, end, hook, title)
     return Response(
         content=data, media_type="video/mp4",
         headers={
