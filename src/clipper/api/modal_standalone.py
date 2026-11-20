@@ -177,11 +177,17 @@ def cut_clip(source, start, end, hook="", title=""):
     start, end = float(start), float(end)
     if end - start < 3 or end - start > 60:
         raise ValueError("clip window must be 3-60s")
-    # Normalize bare IDs to full URLs before yt-dlp sees them: a bare
-    # ID is treated as a YouTube video ID, so "v2932305259" failed with
-    # "[youtube] v2932305259: This video is unavailable".
+    # Normalize bare IDs to full URLs before yt-dlp sees them. The
+    # caller once sent "https://youtu.be/v2932305259" — a Twitch VOD id
+    # wrapped as a YouTube short link — and yt-dlp failed with
+    # "[youtube] v2932305259: This video is unavailable". A "v" + 10
+    # digits is ALWAYS a Twitch VOD id, never a YouTube video, wherever
+    # it appears (bare, youtu.be, or youtube.com URL).
     source = str(source).strip()
-    if not source.startswith("http"):
+    m = re.search(r"v(\d{10})\b", source)
+    if m:
+        source = f"https://www.twitch.tv/videos/{m.group(1)}"
+    elif not source.startswith("http"):
         m = re.fullmatch(r"v?(\d+)", source)
         if m:
             source = f"https://www.twitch.tv/videos/{m.group(1)}"
