@@ -47,8 +47,8 @@ jobs:
           file: deploy/fly/Dockerfile
           push: true
           tags: |
-            ghcr.io/MAJAYKUMAR/vice-city-vibes-clipper:${{ github.sha }}
-            ghcr.io/MAJAYKUMAR/vice-city-vibes-clipper:latest
+            ghcr.io/majaykumar/vice-city-vibes-clipper:${{ github.sha }}
+            ghcr.io/majaykumar/vice-city-vibes-clipper:latest
 
       - name: Set up flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
