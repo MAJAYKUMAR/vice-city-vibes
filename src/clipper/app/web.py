@@ -10,10 +10,10 @@ Data sources (first hit wins):
   * <repo>/dashboard/streams.json, trends.md, garage/clips.json
     — local fallback (what `python -m clipper.app.dashboard` writes)
 
-Sections: live GTA 6 streams now, auto-pilot top pick, Most Wanted
-(trends by views/hour), Hype Meter per stream, Video Garage clips with
-safety verdicts, watcher status / last run, Modal cutter status, and
-Fly machine status.
+Sections: hero, stat strip, 01 Most Wanted, 02 Stream Dashboard,
+03 Auto-pilot top pick, 04 Hype Meter, 05 Cutting Room, 06 Video
+Garage, Export formats, watcher status / last run, Modal cutter
+status, and Fly machine status.
 
 READ-ONLY and NO AUTH (for now): this is Ajay's personal view of his
 own clipper. There are no buttons that record, cut or post anything —
@@ -135,7 +135,7 @@ def collect_state():
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "app": APP_NAME, "public_url": PUBLIC_URL,
-        "fly": {"region": "dfw", "machine": "shared-cpu-1x @ 512MB",
+        "fly": {"region": "dfw", "machine": "shared-cpu-1x @ 1GB",
                 "state": "running — this page is served by it",
                 "note": "Watcher runs in the same machine; "
                         "auto_stop_machines is off, min_machines_running=1."},
@@ -214,14 +214,29 @@ def render(state):
             c.get("safety"), "unknown")
         st = stars(int((c.get("stars") or 0) * 20))
         clip_cards += (
-            f'<div class="clip-card"><div class="clip-top"><b>{_esc(c.get("moment") or c.get("source_title") or "Clip")}</b>'
-            f'<span class="badge {badge}">{_esc(c.get("safety"))}</span></div>'
-            f'<span class="stars">{st}</span>'
-            f'<p>{_esc(c.get("duration_s"))}s · {_esc(c.get("status"))} · {_esc(c.get("stream"))}</p>'
+            f'<div class="clip-card"><div class="clip-poster {badge}">'
+            f'<span class="poster-dur">{_esc(c.get("duration_s"))}s · 9:16</span>'
+            f'<span class="poster-moment">{_esc(c.get("moment") or c.get("source_title") or "Clip")}</span>'
+            f'<span><span class="badge {badge}">{_esc(c.get("safety"))}</span></span></div>'
+            f'<div class="clip-body"><span class="stars">{st}</span>'
+            f'<p>{_esc(c.get("status"))} · {_esc(c.get("stream"))}</p>'
             f'<div class="chips"><span class="chip">✂ Cut</span><span class="chip">CC Captions</span>'
-            f'<span class="chip">9:16 Vertical</span></div></div>')
+            f'<span class="chip">9:16 Vertical</span><span class="chip">16:9</span></div></div></div>')
     if not clip_cards:
         clip_cards = "<p class=\"dim\">No clips registered yet.</p>"
+
+    # ---- Cutting Room: progress from garage clip statuses ----
+    n_new = sum(1 for c in clips if (c.get("status") or "").lower() == "new")
+    n_block = sum(1 for c in clips if (c.get("safety") or "").upper() == "BLOCK")
+    n_safe = sum(1 for c in clips if (c.get("safety") or "").upper() == "SAFE")
+    n_total = len(clips)
+    cutting_html = (
+        f'<div class="steps">'
+        f'<div class="step done"><b>✂ {n_total}</b><span>Cut</span></div>'
+        f'<div class="step done"><b>▣ {n_total}</b><span>Reframe 9:16</span></div>'
+        f'<div class="step done"><b>CC {n_total}</b><span>Captions</span></div>'
+        f'<div class="step"><b>{n_safe} safe</b><span>{n_new} new · {n_block} blocked</span></div>'
+        f'</div>')
 
     modal_cls = {"ok": "safe", "up": "safe"}.get(modal["state"], "review")
     log_html = "<br>".join(_esc(l) for l in log) or "No watcher log yet."
@@ -230,75 +245,150 @@ def render(state):
 
     css = """
 *{box-sizing:border-box}
-body{margin:0;font-family:'Arial Narrow',Impact,'Segoe UI',system-ui,sans-serif;background:#0a0514;color:#f5eefc}
+/* Design system — tokens + component patterns reused from proven MIT kits:
+   - Tabler (tabler/tabler, MIT): plain-HTML dashboard kit — card, badge,
+     progress-bar and ranked-list patterns; dark-mode-first, one CSS file.
+   - shadcn/ui dashboard-01 blocks (shadcn-ui/ui, MIT): card / stat-card /
+     badge / progress tokens — radius scale, muted foreground, ring on hover.
+   Evaluated and NOT used: shadcn dashboard templates and TailAdmin — both
+   are React/Next.js and need a build step; this server is stdlib-only
+   Python with no build step, so the kits are applied as CDN-free inline
+   design tokens (same values, no external dependency, page still renders
+   if any CDN is unreachable). No paid library, no auth, no pricing. */
+:root{
+--bg:#07030f;--panel:#150a26;--panel2:#1e1030;--line:#3d2358;--gold:#ffd166;
+--pink:#ff2e88;--orange:#ff5e3a;--violet:#c9a7e8;--dim:#9d7fc4;--ink:#f5eefc;
+/* shadcn-style tokens: radius scale + semantic surfaces */
+--radius-sm:6px;--radius-md:10px;--radius-lg:16px;--radius-xl:18px;
+--card:#150a26;--card-hover:#1e1030;--muted:#9d7fc4;--muted-fg:#c9a7e8;
+--primary:#ff2e88;--ring:rgba(123,47,247,.45);
+/* Tabler-style tokens: spacing scale + border */
+--sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;
+--border:1px solid #3d2358}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:'Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;
+background:radial-gradient(1200px 500px at 50% -10%,#3b0a4e 0%,transparent 60%),var(--bg);color:var(--ink);line-height:1.45}
 a{color:#7dd3fc;text-decoration:none} a:hover{text-decoration:underline}
-/* --- hero: synthwave sunset, pure CSS --- */
-.hero{position:relative;overflow:hidden;background:linear-gradient(180deg,#12041f 0%,#3b0a4e 45%,#7a1e63 70%,#ff5e3a 100%);padding:34px 20px 0;text-align:center}
-.hero .sun{width:340px;height:170px;margin:0 auto -90px;border-radius:170px 170px 0 0;
-background:repeating-linear-gradient(180deg,#ffd166 0 14px,transparent 14px 22px,#ff9a3d 22px 36px,transparent 36px 44px,#ff2e88 44px 60px,transparent 60px 68px);
-opacity:.95;box-shadow:0 0 90px rgba(255,94,58,.55)}
+/* --- hero --- */
+.hero{position:relative;overflow:hidden;text-align:center;padding:26px 20px 0;
+background:linear-gradient(180deg,#12041f 0%,#3b0a4e 42%,#7a1e63 68%,#ff5e3a 100%)}
+.hero .sun{width:min(420px,80vw);height:200px;margin:6px auto -110px;border-radius:210px 210px 0 0;
+background:repeating-linear-gradient(180deg,#ffd166 0 16px,transparent 16px 26px,#ff9a3d 26px 42px,transparent 42px 52px,#ff2e88 52px 70px,transparent 70px 80px);
+opacity:.95;box-shadow:0 0 110px rgba(255,94,58,.55)}
 .hero-inner{position:relative;z-index:2}
-.script{font-family:'Segoe Script','Brush Script MT',cursive;font-size:26px;color:#ff7ad9;text-shadow:0 0 18px #ff2e88;margin:0}
-.hero h1{margin:2px 0 0;font-size:56px;line-height:.95;letter-spacing:2px;font-weight:900;text-transform:uppercase;
-background:linear-gradient(90deg,#fff 10%,#ffd166 40%,#ff5e3a 65%,#ff2e88 90%);-webkit-background-clip:text;background-clip:text;color:transparent;
-text-shadow:0 4px 24px rgba(0,0,0,.35)}
-.hero .sub{margin:10px 0 18px;color:#ffe9f5;font-size:16px;letter-spacing:.5px}
-.topbar{display:flex;justify-content:space-between;align-items:center;max-width:1180px;margin:0 auto 14px;padding:0 4px;position:relative;z-index:2}
+.script{font-family:'Segoe Script','Brush Script MT',cursive;font-size:28px;color:#ff7ad9;text-shadow:0 0 18px #ff2e88;margin:0}
+.hero h1{margin:4px 0 0;font-size:clamp(38px,7vw,64px);line-height:.95;letter-spacing:2px;font-weight:900;text-transform:uppercase;
+background:linear-gradient(90deg,#fff 10%,#ffd166 40%,#ff5e3a 65%,#ff2e88 90%);-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero .tag{margin:12px auto 0;font-size:clamp(18px,3vw,26px);font-weight:800;color:#fff;letter-spacing:.5px}
+.hero .tag b{color:var(--gold)}
+.hero .sub{margin:8px 0 20px;color:#ffe9f5;font-size:15px}
+.topbar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;max-width:1180px;margin:0 auto 16px;position:relative;z-index:2}
 .brand{font-weight:900;letter-spacing:3px;font-size:15px;color:#fff}
-.brand b{color:#ffd166}
+.brand b{color:var(--gold)}
 .pill{display:inline-block;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
-.pill.live{background:#ff2e88;color:#fff;box-shadow:0 0 14px rgba(255,46,136,.7)}
-.pill.onair{background:#1a0b2e;border:1px solid #ff9a3d;color:#ffd166}
+.pill.live{background:var(--pink);color:#fff;box-shadow:0 0 14px rgba(255,46,136,.7)}
+.pill.onair{background:#1a0b2e;border:1px solid #ff9a3d;color:var(--gold)}
 main{max-width:1180px;margin:0 auto;padding:22px 18px 10px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:-58px 0 18px;position:relative;z-index:3}
-@media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}.hero h1{font-size:38px}}
-.stat{background:#170b28;border:1px solid #4a1e6e;border-radius:14px;padding:16px;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.45)}
-.stat b{display:block;font-size:34px;color:#ffd166;line-height:1}
-.stat span{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:#c9a7e8}
-.card{background:#150a26;border:1px solid #3d2358;border-radius:16px;padding:18px 20px;margin-bottom:18px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
-.card h2{margin:0 0 4px;font-size:30px;letter-spacing:1px;text-transform:uppercase;font-weight:900}
+.secnum{font-size:13px;font-weight:800;letter-spacing:3px;color:var(--gold);text-transform:uppercase}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:-64px 0 18px;position:relative;z-index:3}
+@media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{background:rgba(23,11,40,.92);backdrop-filter:blur(6px);border:1px solid #4a1e6e;border-radius:16px;padding:18px 12px;text-align:center;box-shadow:0 10px 34px rgba(0,0,0,.5)}
+.stat b{display:block;font-size:36px;color:var(--gold);line-height:1}
+.stat span{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--violet)}
+.card{background:linear-gradient(180deg,#180c2c,#130a22);border:1px solid var(--line);border-radius:18px;padding:20px 22px;margin-bottom:20px;box-shadow:0 10px 34px rgba(0,0,0,.35)}
+.card h2{margin:2px 0 4px;font-size:clamp(24px,3.4vw,32px);letter-spacing:1px;text-transform:uppercase;font-weight:900}
 .card h2 .grad{background:linear-gradient(90deg,#ffd166,#ff5e3a,#ff2e88);-webkit-background-clip:text;background-clip:text;color:transparent}
-.card .lede{margin:0 0 14px;color:#c9a7e8;font-size:14px}
-.grid{display:grid;grid-template-columns:1.2fr .8fr;gap:18px} @media(max-width:820px){.grid{grid-template-columns:1fr}}
-/* Most Wanted rows */
-.mw-row{display:flex;align-items:center;gap:14px;padding:12px 4px;border-bottom:1px solid #3d2358}
-.mw-rank{font-size:30px;font-weight:900;color:#ffd166;min-width:44px}
+.card .lede{margin:0 0 14px;color:var(--violet);font-size:14px}
+.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:18px} @media(max-width:820px){.grid{grid-template-columns:1fr}}
+.mw-row{display:flex;align-items:center;gap:14px;padding:12px 4px;border-bottom:1px solid var(--line)}
+.mw-row:last-child{border-bottom:0}
+.mw-rank{font-size:32px;font-weight:900;color:var(--gold);min-width:46px;font-variant-numeric:tabular-nums}
 .mw-main{flex:1;min-width:0}
 .mw-main a{display:block;color:#fff;font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mw-sub{display:block;color:#c9a7e8;font-size:13px;margin-top:2px}
-.mw-heat{font-size:20px;font-weight:900;color:#ff7ab8}
-/* stream rows */
-.stream-row{display:flex;align-items:center;gap:14px;padding:14px 4px;border-bottom:1px solid #3d2358}
-.stream-main{flex:1;min-width:0}
-.stream-name{display:block;font-size:22px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:#fff}
-.stream-sub{display:block;color:#c9a7e8;font-size:13px;margin-top:2px}
+.mw-sub{display:block;color:var(--violet);font-size:13px;margin-top:2px}
+.mw-heat{font-size:20px;font-weight:900;color:#ff7ab8;white-space:nowrap}
+.heatbar{height:6px;background:#2a1745;border-radius:3px;overflow:hidden;margin-top:5px}
+.heatbar i{display:block;height:100%;background:linear-gradient(90deg,#ff2e88,#ffb03d,#ffd166)}
+.stream-row{display:flex;align-items:center;gap:14px;padding:14px 4px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.stream-row:last-child{border-bottom:0}
+.stream-main{flex:1;min-width:220px}
+.stream-name{display:block;font-size:21px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:#fff}
+.stream-sub{display:block;color:var(--violet);font-size:13px;margin-top:2px}
 .plat{font-weight:700;text-transform:uppercase;font-size:11px;letter-spacing:1px;padding:2px 8px;border-radius:999px}
 .plat.twitch{background:#6441a5;color:#fff} .plat.youtube{background:#c00;color:#fff}
-.stars{color:#ffd166;letter-spacing:3px;font-size:16px}
+.stars{color:var(--gold);letter-spacing:3px;font-size:16px}
 .hype-side{text-align:right;min-width:110px}
 .hype-num{font-size:22px;font-weight:900;color:#fff}
-.hype-label{display:block;font-size:11px;color:#c9a7e8;text-transform:uppercase;letter-spacing:1px}
-.hypebar{height:8px;background:#3d2358;border-radius:4px;overflow:hidden;margin-top:4px}
+.hype-label{display:block;font-size:11px;color:var(--violet);text-transform:uppercase;letter-spacing:1px}
+.hypebar{height:8px;background:#2a1745;border-radius:4px;overflow:hidden;margin-top:4px}
 .hypebar i{display:block;height:100%;background:linear-gradient(90deg,#ff2e88,#ffb03d,#ffd166)}
 .watch-link{font-weight:700;white-space:nowrap}
-/* top pick */
-.pick-name{font-size:34px;font-weight:900;text-transform:uppercase;letter-spacing:1px;margin:4px 0}
-.pick-meta{color:#c9a7e8;font-size:14px}
-/* garage */
-.garage-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
-.clip-card{background:#1e1030;border:1px solid #3d2358;border-radius:12px;padding:14px}
+.pick-name{font-size:32px;font-weight:900;text-transform:uppercase;letter-spacing:1px;margin:4px 0}
+.pick-meta{color:var(--violet);font-size:14px}
+.rec{display:inline-block;background:#dc2626;color:#fff;font-weight:800;font-size:12px;letter-spacing:2px;padding:3px 10px;border-radius:6px}
+.garage-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.clip-card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:14px;transition:transform .15s ease,border-color .15s ease}
+.clip-card:hover{transform:translateY(-2px);border-color:#7b2ff7}
 .clip-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
-.clip-card p{margin:6px 0 8px;color:#c9a7e8;font-size:13px}
+.clip-card p{margin:6px 0 8px;color:var(--violet);font-size:13px}
 .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;white-space:nowrap}
 .safe{background:#14532d;color:#bbf7d0} .review{background:#713f12;color:#fde68a}
 .block{background:#7f1d1d;color:#fecaca} .unknown{background:#374151;color:#e5e7eb}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{background:#0a0514;border:1px solid #4a1e6e;border-radius:6px;padding:3px 8px;font-size:11px;font-weight:700;letter-spacing:.5px;color:#ffe9f5}
-.dim{color:#9d7fc4}
+.dim{color:var(--dim)}
 .log{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#d8b4fe;white-space:pre-wrap;word-break:break-word}
 .status-row{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0}
 .status-pill{background:#2a1745;border:1px solid #7b2ff7;border-radius:999px;padding:5px 13px;font-size:13px}
-footer{color:#9d7fc4;font-size:13px;text-align:center;padding:12px 20px 34px}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:6px}
+@media(max-width:760px){.steps{grid-template-columns:repeat(2,1fr)}}
+.step{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
+.step b{display:block;font-size:24px;color:var(--gold)}
+.step span{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--violet)}
+.step.done{border-color:#14532d} .step.done b{color:#4ade80}
+.fmt-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.fmt{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center}
+.fmt b{display:block;font-size:20px}
+.fmt span{color:var(--violet);font-size:13px}
+.howto{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+@media(max-width:760px){.howto{grid-template-columns:1fr}}
+.howto div{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px}
+.howto b{color:var(--gold)}
+footer{color:var(--dim);font-size:13px;text-align:center;padding:12px 20px 34px}
+/* --- premium layer: motion, glass, depth --- */
+@keyframes pulseDot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+@keyframes shimmer{0%{background-position:0% 0}100%{background-position:200% 0}}
+@keyframes sunGlow{0%,100%{box-shadow:0 0 90px rgba(255,94,58,.55)}50%{box-shadow:0 0 150px rgba(255,46,136,.75)}}
+@keyframes gradShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
+.hero .sun{animation:sunGlow 5s ease-in-out infinite}
+.hero h1{background-size:200% auto;animation:gradShift 7s ease infinite}
+.pill.live::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#fff;margin-right:6px;animation:pulseDot 1.4s ease-in-out infinite}
+.card{transition:border-color .2s ease,box-shadow .2s ease}
+.card:hover{border-color:#6b3aa8;box-shadow:0 14px 44px rgba(123,47,247,.22)}
+.stat{position:relative;overflow:hidden}
+.stat::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#ff2e88,#ffb03d,#ffd166)}
+.stat:hover{transform:translateY(-2px)}
+.stat{transition:transform .18s ease}
+.mw-row{border-radius:12px;transition:background .15s ease}
+.mw-row:hover{background:rgba(123,47,247,.14)}
+.mw-rank{background:linear-gradient(180deg,rgba(255,209,102,.16),transparent);border-radius:12px;display:flex;align-items:center;justify-content:center;height:52px}
+.stream-row{border-radius:12px;transition:background .15s ease}
+.stream-row:hover{background:rgba(123,47,247,.12)}
+.hypebar i,.heatbar i{background-size:200% 100%;animation:shimmer 2.6s linear infinite}
+.secnum{display:flex;align-items:center;gap:10px}
+.secnum::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,#7b2ff7,transparent)}
+/* gallery garage */
+.clip-poster{border-radius:12px;padding:14px 12px 12px;min-height:118px;display:flex;flex-direction:column;justify-content:space-between;gap:8px;
+background:linear-gradient(135deg,#3b0a4e,#7a1e63 55%,#ff5e3a);position:relative;overflow:hidden}
+.clip-poster::after{content:"";position:absolute;right:-30px;top:-30px;width:110px;height:110px;border-radius:50%;
+background:radial-gradient(circle,rgba(255,209,102,.55),transparent 70%)}
+.clip-poster.review{background:linear-gradient(135deg,#3a2a05,#713f12 60%,#b45309)}
+.clip-poster.block{background:linear-gradient(135deg,#2a0505,#7f1d1d 60%,#450a0a)}
+.poster-moment{font-size:19px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;line-height:1.15;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.45)}
+.poster-dur{align-self:flex-start;background:rgba(0,0,0,.45);border-radius:999px;padding:2px 9px;font-size:11px;font-weight:800;letter-spacing:1px}
+.clip-body{padding:10px 2px 0}
+.pick-name{text-shadow:0 0 30px rgba(255,46,136,.35)}
+
 """
 
     return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
@@ -312,7 +402,8 @@ footer{color:#9d7fc4;font-size:13px;text-align:center;padding:12px 20px 34px}
 <div class="hero-inner">
 <p class="script">your clips, live from Vice City</p>
 <h1>Vice City Vibes</h1>
-<p class="sub">Personal view of the GTA 6 clipper · {PUBLIC_URL} · updated {_esc(state["generated_at"])}</p>
+<p class="tag">One live stream. <b>50 moments.</b> Zero editing.</p>
+<p class="sub">The personal view of the GTA 6 clipper — it watches the top live streams, catches the moment chat goes crazy, and parks the clip in the Garage. Personal use only · {PUBLIC_URL} · updated {_esc(state["generated_at"])}</p>
 </div>
 <div class="sun"></div>
 </div>
@@ -324,12 +415,19 @@ footer{color:#9d7fc4;font-size:13px;text-align:center;padding:12px 20px 34px}
 <div class="stat"><b>15 min</b><span>Watcher cycle</span></div>
 </div>
 
+<div class="howto">
+<div><b>01 · Watch</b><p class="lede">The watcher scans Twitch + YouTube every 15 min for the busiest GTA 6 streams.</p></div>
+<div><b>02 · Clip</b><p class="lede">Good moments are cut full-fill 9:16, with captions and a hook — CPU now, GPU when it is live.</p></div>
+<div><b>03 · Post</b><p class="lede">Only good clips, only with Ajay's approval — 1 per hour, YouTube capped at 10/day.</p></div>
+</div>
+<br>
+
 <div class="grid">
-<div class="card"><h2>🤖 Auto-pilot <span class="grad">top pick</span></h2>
-<p class="lede">The scout picks the busiest stream — the engine watches it.</p>
+<div class="card"><span class="secnum">03 · Auto-pilot</span><h2>🤖 Auto-pilot <span class="grad">top pick</span></h2>
+<p class="lede">The scout picks the busiest stream — the engine watches it. <span class="rec">● REC</span></p>
 {_esc(top.get("channel")) and f'<div class="pick-name">{_esc(top.get("channel"))}</div><span class="stars">{stars(top_hype)}</span> <b>{top_hype}% hype</b><p class="pick-meta">{_esc(top.get("platform"))} · {top.get("viewers") or ""} viewers</p><p>{_esc(top.get("title"))}</p><p><a href="{_esc(top.get("url"))}" target="_blank" rel="noopener">Watch the stream ↗</a></p>' or '<p class="dim">No live pick right now.</p>'}
 <p class="pick-meta">Checked: {_esc(s.get("checked_at"))} · {s["youtube_live"]} YouTube live · {s["twitch_live"]} Twitch live</p></div>
-<div class="card"><h2>⚡ <span class="grad">Status</span></h2>
+<div class="card"><span class="secnum">Status</span><h2>⚡ <span class="grad">Status</span></h2>
 <p class="lede">Fly watcher + GPU cutter, at a glance.</p>
 <div class="status-row">
 <span class="status-pill">Fly: {_esc(state["fly"]["state"])}</span>
@@ -341,21 +439,34 @@ footer{color:#9d7fc4;font-size:13px;text-align:center;padding:12px 20px 34px}
 <p class="pick-meta">Last watcher line: {_esc(state["watcher"]["last_log_line"])}</p></div>
 </div>
 
-<div class="card"><h2>🔥 Most <span class="grad">Wanted</span></h2>
-<p class="lede">The busiest GTA 6 streams, ranked by heat.</p>
+<div class="card"><span class="secnum">01 · Most Wanted</span><h2>🔥 Most <span class="grad">Wanted</span></h2>
+<p class="lede">Scanning Twitch and YouTube for the busiest chats — ranked by heat.</p>
 {wanted_rows}</div>
 
-<div class="card"><h2>📺 Stream <span class="grad">Dashboard</span></h2>
+<div class="card"><span class="secnum">02 · Stream Dashboard</span><h2>📺 Stream <span class="grad">Dashboard</span></h2>
 <p class="lede">Top GTA 6 live streams from Twitch and YouTube in one place — ranked by viewers and hype.</p>
 {stream_cards}
 <p class="dim">Scouting only — clipping needs own footage or a live paid campaign that allows that creator (Rule 2/11).</p></div>
 
-<div class="card"><h2>🎬 Video <span class="grad">Garage</span> — {_esc(state["garage"]["count"])} clips</h2>
-<p class="lede">Every clip the engine cut — sorted by moment, with its safety verdict.</p>
+<div class="card"><span class="secnum">05 · Cutting Room</span><h2>✂️ Cutting <span class="grad">Room</span></h2>
+<p class="lede">Every clip is cut, reframed and captioned here — watch it get edited.</p>
+{cutting_html}</div>
+
+<div class="card"><span class="secnum">06 · Video Garage</span><h2>🎬 Video <span class="grad">Garage</span> — {_esc(state["garage"]["count"])} clips</h2>
+<p class="lede">All your clips land in one garage — sorted by streamer, platform and moment. Preview the moment, check its safety verdict.</p>
 <div class="garage-grid">{clip_cards}</div>
 <p class="dim">Blocked clips are never approved or posted. Safety: SAFE / REVIEW / BLOCK.</p></div>
 
-<div class="card"><h2>📋 Watcher <span class="grad">log</span></h2>
+<div class="card"><span class="secnum">Export</span><h2>📤 Every clip, <span class="grad">2 formats</span></h2>
+<p class="lede">Ready to post on YouTube, Instagram and Facebook — vertical first, widescreen when needed.</p>
+<div class="fmt-grid">
+<div class="fmt"><b>9:16</b><span>YouTube Shorts</span></div>
+<div class="fmt"><b>9:16</b><span>Instagram Reels</span></div>
+<div class="fmt"><b>9:16</b><span>Facebook Reels</span></div>
+<div class="fmt"><b>16:9</b><span>YouTube / X landscape</span></div>
+</div></div>
+
+<div class="card"><span class="secnum">Watcher log</span><h2>📋 Watcher <span class="grad">log</span></h2>
 <div class="log">{log_html}</div></div>
 </main>
 <footer>Read-only personal dashboard — no recording, cutting or posting from here.
