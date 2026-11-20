@@ -482,6 +482,11 @@ class Handler(BaseHTTPRequestHandler):
         data = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        # No caching: the dashboard must always show the latest release.
+        # (Ajay kept seeing the old dashboard because browsers cached it.)
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
