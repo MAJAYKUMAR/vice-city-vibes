@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from clipper.app import garage as garage_mod
 from clipper.paths import repo_root
 
 DATA = Path("/data")
@@ -273,6 +274,15 @@ def render(state):
         badge = {"SAFE": "safe", "REVIEW": "review", "BLOCK": "block"}.get(
             c.get("safety"), "unknown")
         st = stars(int((c.get("stars") or 0) * 20))
+        # Virality (workstream A): defensive .get — rows without the
+        # fields simply show no score, never crash the page.
+        vir = c.get("virality")
+        vir_html = ""
+        if isinstance(vir, (int, float)):
+            why = (c.get("virality_why") or "").strip()
+            vir_html = (f'<span class="chip">🔥 {vir}/100</span>'
+                        + (f' <span class="dim">{_esc(why)}</span>' if why else ""))
+        edit_url = "/editor?clip=" + urllib.parse.quote(c.get("file") or "", safe="")
         clip_cards += (
             f'<div class="clip-card"><div class="clip-poster {badge}">'
             f'<span class="poster-dur">{_esc(c.get("duration_s"))}s · 9:16</span>'
@@ -280,8 +290,10 @@ def render(state):
             f'<span><span class="badge {badge}">{_esc(c.get("safety"))}</span></span></div>'
             f'<div class="clip-body"><span class="stars">{st}</span>'
             f'<p>{_esc(c.get("status"))} · {_esc(c.get("stream"))}</p>'
+            f'{vir_html}'
             f'<div class="chips"><span class="chip">✂ Cut</span><span class="chip">CC Captions</span>'
-            f'<span class="chip">9:16 Vertical</span><span class="chip">16:9</span></div></div></div>')
+            f'<span class="chip">9:16 Vertical</span><span class="chip">16:9</span>'
+            f'<a class="chip" href="{edit_url}">✂ Edit / trim</a></div></div></div>')
     if not clip_cards:
         clip_cards = "<p class=\"dim\">No clips registered yet.</p>"
 
@@ -555,6 +567,63 @@ Posting still needs Ajay's approval of the exact clip (Vice City Vibes Rule 1).
 No login yet — keep this URL private.</footer>
 </body></html>"""
 
+def render_editor(clip_path=None, message="", error=""):
+    """Minimal trim editor: pick a garage clip, trim start/end in
+    seconds, save as a NEW clip (never overwrites the original)."""
+    rows = garage_mod.load()
+    sel = None
+    if clip_path:
+        sel = next((r for r in rows if r.get("file") == clip_path), None)
+    opts = ""
+    for r in rows:
+        f = r.get("file") or ""
+        label = (f"{r.get('moment') or r.get('source_title') or 'Clip'} — "
+                 f"{r.get('duration_s')}s · {r.get('status')} · "
+                 f"{Path(f).name}")
+        opts += (f'<option value="{_esc(f)}"'
+                 + (' selected' if sel and sel.get("file") == f else '')
+                 + f'>{_esc(label)}</option>')
+    form = ""
+    if sel:
+        dur = sel.get("duration_s") or 0
+        vir = sel.get("virality")
+        vir_line = ""
+        if isinstance(vir, (int, float)):
+            why = (sel.get("virality_why") or "").strip()
+            vir_line = (f"<p>🔥 Virality {vir}/100"
+                        + (f" — {_esc(why)}" if why else "") + "</p>")
+        form = f"""
+<h2>Trim: {_esc(sel.get("moment") or sel.get("source_title") or "Clip")}</h2>
+<p>{_esc(sel.get("stream"))} · {dur}s · {_esc(sel.get("status"))} · safety {_esc(sel.get("safety"))}</p>
+{vir_line}
+<p><code>{_esc(sel.get("file"))}</code></p>
+<form method="post" action="/editor/save">
+<input type="hidden" name="clip" value="{_esc(sel.get("file"))}">
+<label>Start (s, 0 – {dur}): <input type="number" name="start" value="0" min="0" max="{dur}" step="0.1" required></label><br><br>
+<label>End (s, must be &gt; start and ≤ {dur}): <input type="number" name="end" value="{dur}" min="0" max="{dur}" step="0.1" required></label><br><br>
+<button type="submit">Save trimmed clip</button>
+</form>
+<p>The trimmed clip is saved as a new file (<code>&lt;name&gt;-edit1.mp4</code>, …) next to the original and registered in the garage. The original is never touched.</p>"""
+    msg_html = f'<p><b>{_esc(message)}</b></p>' if message else ""
+    err_html = f'<p style="color:#fca5a5"><b>Error:</b> {_esc(error)}</p>' if error else ""
+    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Editor — Vice City Vibes</title>
+<style>body{{font-family:system-ui;background:#07030f;color:#f5eefc;margin:0;padding:24px}}
+a{{color:#7dd3fc}} input,button,select{{font-size:16px;padding:8px;border-radius:8px}}
+button{{background:#ff2e88;color:#fff;border:0;font-weight:700;cursor:pointer}}
+code{{color:#c9a7e8}}</style></head><body>
+<h1>✂️ Clip Editor — trim only</h1>
+<p><a href="/">← Back to dashboard</a></p>
+{msg_html}{err_html}
+<form method="get" action="/editor">
+<label>Clip: <select name="clip">{opts or "<option value=''>No clips in garage</option>"}</select></label>
+<button type="submit">Open</button>
+</form>
+{form or "<p>Pick a clip above to trim it.</p>"}
+</body></html>"""
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -574,12 +643,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         # Strip any query string (e.g. /?v=2 cache-buster) before matching.
-        path = urllib.parse.urlparse(self.path).path
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
         if path in ("/", "/index.html"):
             try:
                 self._send(200, render(collect_state()), "text/html; charset=utf-8")
             except Exception as e:
                 self._send(500, f"Dashboard error: {html.escape(str(e))}",
+                           "text/plain; charset=utf-8")
+        elif path == "/editor":
+            qs = urllib.parse.parse_qs(parsed.query)
+            clip = (qs.get("clip") or [None])[0]
+            msg = (qs.get("saved") or [""])[0]
+            message = f"Saved trimmed clip: {msg}" if msg else ""
+            try:
+                self._send(200, render_editor(clip, message=message),
+                           "text/html; charset=utf-8")
+            except Exception as e:
+                self._send(500, f"Editor error: {html.escape(str(e))}",
                            "text/plain; charset=utf-8")
         elif path == "/api/state":
             self._send(200, json.dumps(collect_state(), ensure_ascii=False, indent=1),
@@ -589,6 +670,38 @@ class Handler(BaseHTTPRequestHandler):
                        "application/json")
         else:
             self._send(404, "Not found", "text/plain; charset=utf-8")
+
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path != "/editor/save":
+            self._send(404, "Not found", "text/plain; charset=utf-8")
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        body = self.rfile.read(length).decode("utf-8", "replace") if length else ""
+        form = urllib.parse.parse_qs(body)
+        clip = (form.get("clip") or [""])[0]
+        start = (form.get("start") or [""])[0]
+        end = (form.get("end") or [""])[0]
+        try:
+            row = garage_mod.save_edit(clip, start, end)
+        except (ValueError, RuntimeError) as e:
+            self._send(400, render_editor(clip or None, error=str(e)),
+                       "text/html; charset=utf-8")
+            return
+        except Exception as e:
+            self._send(500, render_editor(clip or None,
+                                          error=f"unexpected: {e}"),
+                       "text/html; charset=utf-8")
+            return
+        loc = ("/editor?clip=" + urllib.parse.quote(row["file"], safe="")
+               + "&saved=" + urllib.parse.quote(Path(row["file"]).name, safe=""))
+        self.send_response(303)
+        self.send_header("Location", loc)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
 
 def main():

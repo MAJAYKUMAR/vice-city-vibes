@@ -162,9 +162,13 @@ def health_check(timeout=30):
 
 
 def request_cut(source, start, end, hook="", title="", stars=0,
-                timeout=None, dry_run=False):
+                timeout=None, dry_run=False, caption_style=None,
+                track=None):
     """POST a cut to Modal, download the mp4, register in the Garage.
-    Returns (clip_path, safety_verdict) or (None, reason) on refusal."""
+    Returns (clip_path, safety_verdict) or (None, reason) on refusal.
+    caption_style (karaoke/pop/minimal, English only) and track (crop
+    keyframes from the CPU path) are optional and forwarded to /cut;
+    both default to None, which keeps today's behaviour."""
     start, end = float(start), float(end)
     if end - start < 3 or end - start > 60:
         return None, "clip window must be 3-60s"
@@ -178,8 +182,13 @@ def request_cut(source, start, end, hook="", title="", stars=0,
     out_dir = HERE / "jobs" / job_id / "edits"
     out_dir.mkdir(parents=True, exist_ok=True)
     clip = out_dir / "clip_1_fill.mp4"
-    payload = json.dumps({"source": source, "start": start, "end": end,
-                          "hook": hook, "title": title}).encode("utf-8")
+    payload_obj = {"source": source, "start": start, "end": end,
+                   "hook": hook, "title": title}
+    if track is not None:
+        payload_obj["track"] = track
+    if caption_style is not None:
+        payload_obj["caption_style"] = caption_style
+    payload = json.dumps(payload_obj).encode("utf-8")
     req = urllib.request.Request(_endpoint(), data=payload,
                                  headers=_headers(), method="POST")
     try:
@@ -201,6 +210,7 @@ def request_cut(source, start, end, hook="", title="", stars=0,
     meta = {"file": str(clip), "start": start, "end": end, "layout": "filltrack",
             "hook": hook, "title": title, "safety": {"verdict": verdict},
             "source_url": source, "duration_s": duration,
+            "caption_style": caption_style, "track": track,
             "modal_endpoint": _endpoint().split("//", 1)[-1].split("/", 1)[0],
             "job_id": job_id}
     clip.with_suffix(".json").write_text(json.dumps(meta, indent=1), encoding="utf-8")
@@ -232,6 +242,10 @@ def main():
     p.add_argument("--end", type=float, required=True)
     p.add_argument("--hook", default=""); p.add_argument("--title", default="")
     p.add_argument("--stars", type=int, default=0)
+    p.add_argument("--caption-style", default=None,
+                   choices=["karaoke", "pop", "minimal"])
+    p.add_argument("--track", default=None,
+                   help="crop keyframes JSON [[t,x],...] or @path/to/keyframes.json")
     p.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("from-autopilot")
     p.add_argument("--start", type=float, required=True)
@@ -252,8 +266,14 @@ def main():
         print(f"gate: {reason}")
         if not ok:
             sys.exit(2)
+        track = None
+        if a.track:
+            track_src = (open(a.track[1:]).read() if a.track.startswith("@")
+                         else a.track)
+            track = json.loads(track_src)
         clip, verdict = request_cut(a.source, a.start, a.end, a.hook,
-                                    a.title, a.stars, dry_run=a.dry_run)
+                                    a.title, a.stars, dry_run=a.dry_run,
+                                    caption_style=a.caption_style, track=track)
         if a.dry_run:
             print("dry-run done — no request sent, nothing cut.")
             return

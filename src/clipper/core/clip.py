@@ -41,6 +41,7 @@ from pathlib import Path
 
 from clipper.infra.ssl_fix import patch_module, patch_yt_dlp  # noqa: E402
 from clipper.paths import repo_root
+from clipper.core import captions as _captions  # noqa: E402  (styled captions; stdlib + ffmpeg only)
 
 # Repo root: jobs/, dashboard/ and garage/ live here, not next to this file.
 ROOT = repo_root()
@@ -127,7 +128,8 @@ def run_moments(src, top=8, min_s=7, max_s=30, max_minutes=90):
     moments.main()
 
 
-def run_cut(job_dir, pick=1, hook="", layout="filltrack", title=""):
+def run_cut(job_dir, pick=1, hook="", layout="filltrack", title="",
+            caption_style=None):
     import json as _json
     from pathlib import Path as _Path
 
@@ -142,23 +144,29 @@ def run_cut(job_dir, pick=1, hook="", layout="filltrack", title=""):
     probe = common.ffprobe(src)
     vs = [s for s in probe["streams"] if s.get("codec_type") == "video"][0]
     if layout == "filltrack":
-        cut_filltrack(job, pick, hook, title)
+        cut_filltrack(job, pick, hook, title, caption_style=caption_style)
         return
     if int(vs["width"]) < int(vs["height"]):
-        cut_portrait(job, pick, hook, layout, title)
+        cut_portrait(job, pick, hook, layout, title,
+                     caption_style=caption_style)
         return
     sys.argv = ["cut.py", job_dir, "--pick", str(pick), "--layout", layout,
                 "--hook", hook, "--title", title]
     cut.main()
 
 
-def cut_filltrack(job, pick=1, hook="", title="", start=None, end=None):
+def cut_filltrack(job, pick=1, hook="", title="", start=None, end=None,
+                  caption_style=None):
     """Full-fill 9:16 cut: scene-snapped window, content filter, tracked
     crop that fills the whole phone screen, captions + hook, -14 LUFS.
 
     Writes jobs/<id>/edits/clip_<n>_fill.mp4 + clip_<n>_fill.json.
     A BLOCK safety verdict does NOT stop the cut (format proof), but
     the json carries safety=BLOCK and garage.py will not approve it.
+
+    caption_style: None (default) keeps today's plain word captions
+    from cut.build_ass exactly; "karaoke"/"pop"/"minimal" burn the
+    styled captions from clipper.core.captions instead.
     """
     import json as _json
     from pathlib import Path as _Path
@@ -200,8 +208,15 @@ def cut_filltrack(job, pick=1, hook="", title="", start=None, end=None):
     out = job / "edits"
     out.mkdir(exist_ok=True)
     ass = out / f"clip_{pick}_fill.ass"
-    ass.write_text(cut.build_ass(words, s0, e0, hook, 1380, caps="word"),
-                   encoding="utf-8")
+    if caption_style is None:
+        # Default: today's plain word captions, byte-identical path.
+        ass.write_text(cut.build_ass(words, s0, e0, hook, 1380, caps="word"),
+                       encoding="utf-8")
+    else:
+        _captions._validate_style(caption_style)
+        ass.write_text(_captions.build_ass(words, s0, e0, hook, 1380,
+                                           style=caption_style),
+                       encoding="utf-8")
     vf = reframe.fill_filter(sw, sh, plan["keyframes"], ass)
     mp4 = out / f"clip_{pick}_fill.mp4"
     common.run([common.tool("ffmpeg"), "-y", "-v", "error",
@@ -215,6 +230,7 @@ def cut_filltrack(job, pick=1, hook="", title="", start=None, end=None):
     common.save_json(out / f"clip_{pick}_fill.json",
                      {"file": str(mp4), "start": s0, "end": e0,
                       "layout": "filltrack", "hook": hook, "title": title,
+                      "caption_style": caption_style,
                       "safety": verdict, "scene_cuts": cuts,
                       "snap_notes": snap_notes,
                       "crop_keyframes": plan["keyframes"],
@@ -228,9 +244,13 @@ def cut_filltrack(job, pick=1, hook="", title="", start=None, end=None):
           f"safety={verdict['verdict']} scenes={cuts} snap={snap_notes}")
 
 
-def cut_portrait(job_dir, pick=1, hook="", layout="blur", title=""):
+def cut_portrait(job_dir, pick=1, hook="", layout="blur", title="",
+                 caption_style=None):
     """Vertical cut for portrait sources: scale-to-cover 1080x1920,
-    word-by-word captions + hook from cut.build_ass, -14 LUFS."""
+    word-by-word captions + hook from cut.build_ass, -14 LUFS.
+
+    caption_style: None (default) keeps today's plain word captions;
+    "karaoke"/"pop"/"minimal" use clipper.core.captions instead."""
     import json as _json
     from pathlib import Path as _Path
 
@@ -241,8 +261,15 @@ def cut_portrait(job_dir, pick=1, hook="", layout="blur", title=""):
     out = job / "edits"
     out.mkdir(exist_ok=True)
     ass = out / f"clip_{pick}.ass"
-    ass.write_text(cut.build_ass(words, p["start"], p["end"], hook, 1380,
-                                 caps="word"), encoding="utf-8")
+    if caption_style is None:
+        # Default: today's plain word captions, byte-identical path.
+        ass.write_text(cut.build_ass(words, p["start"], p["end"], hook, 1380,
+                                     caps="word"), encoding="utf-8")
+    else:
+        _captions._validate_style(caption_style)
+        ass.write_text(_captions.build_ass(words, p["start"], p["end"], hook,
+                                           1380, style=caption_style),
+                       encoding="utf-8")
     # Path escaping is openshorts' escape_filter_value (vendored whole in
     # openshorts_ffmpeg_utils.py).
     from clipper.core.openshorts_ffmpeg_utils import escape_filter_value
@@ -261,6 +288,7 @@ def cut_portrait(job_dir, pick=1, hook="", layout="blur", title=""):
     common.save_json(out / f"clip_{pick}.json",
                      {"file": str(mp4), "start": p["start"], "end": p["end"],
                       "layout": "portrait-fill", "hook": hook, "title": title,
+                      "caption_style": caption_style,
                       "source_url": info.get("webpage_url"),
                       "source_title": info.get("title"),
                       "source_channel": info.get("channel") or info.get("uploader")})
@@ -343,8 +371,12 @@ def main():
     p.add_argument("--max-minutes", type=int, default=90)
     p = sub.add_parser("cut"); p.add_argument("job"); p.add_argument("--pick", type=int, default=1)
     p.add_argument("--hook", default=""); p.add_argument("--layout", default="filltrack"); p.add_argument("--title", default="")
+    p.add_argument("--caption-style", choices=_captions.STYLE_NAMES, default=None,
+                   help="styled captions (karaoke/pop/minimal); omit for today's plain word captions")
     p = sub.add_parser("manual"); p.add_argument("src"); p.add_argument("--start", type=float, required=True)
     p.add_argument("--end", type=float, required=True); p.add_argument("--hook", default="")
+    p.add_argument("--caption-style", choices=_captions.STYLE_NAMES, default=None,
+                   help="styled captions (karaoke/pop/minimal); omit for today's plain word captions")
     p = sub.add_parser("hype"); p.add_argument("candidates")
     p = sub.add_parser("export"); p.add_argument("clip")
     p = sub.add_parser("polish"); p.add_argument("clip")
@@ -355,13 +387,14 @@ def main():
     if a.cmd == "scout":
         run_moments(a.src, a.top, a.min, a.max, a.max_minutes)
     elif a.cmd == "cut":
-        run_cut(a.job, a.pick, a.hook, a.layout, a.title)
+        run_cut(a.job, a.pick, a.hook, a.layout, a.title, a.caption_style)
     elif a.cmd == "manual":
         # Scout first (builds transcript + job dir), then full-fill cut
         # of the exact window (Mark Start / Mark End).
         run_moments(a.src, top=1, min_s=7, max_s=30)
         job = sorted((HERE / "jobs").glob("*"))[-1]
-        cut_filltrack(job, 1, a.hook, start=a.start, end=a.end)
+        cut_filltrack(job, 1, a.hook, start=a.start, end=a.end,
+                      caption_style=a.caption_style)
     elif a.cmd == "hype":
         hype_report(a.candidates)
     elif a.cmd == "export":

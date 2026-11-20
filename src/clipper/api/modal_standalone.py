@@ -178,6 +178,21 @@ except Exception:
     _plan_crop = None  # in-cutter tracking unavailable without track.py
 
 
+# Styled captions (workstream C, coordinator wiring): clipper.core.captions
+# is stdlib + ffmpeg only, so it imports cleanly on Modal — but keep the
+# same fallback pattern as the track import: if the sibling module ever
+# fails to ship, styled captions degrade to the plain _build_ass below
+# and the cut still succeeds. English only (Ajay, 2026-11-20).
+try:
+    from clipper.core.captions import (  # noqa: F401
+        STYLE_NAMES as _CAPTION_STYLES,
+        build_ass as _styled_build_ass,
+    )
+    _CAPTIONS_AVAILABLE = True
+except Exception:
+    _CAPTIONS_AVAILABLE = False
+    _CAPTION_STYLES = ["karaoke", "pop", "minimal"]
+
 
 def _build_ass(words, start, end, hook, path):
     """Minimal word-by-word ASS captions + hook, same layout as
@@ -212,6 +227,31 @@ def _build_ass(words, start, end, hook, path):
             lines.append(
                 f"Dialogue: 0,{_ts(s - start)},{_ts(e - start)},Word,,0,0,0,,{text}")
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _write_ass(words, start, end, hook, path, style=None):
+    """Write the .ass caption file. style=None keeps today's plain word
+    captions (_build_ass); a style name (karaoke/pop/minimal, English
+    only) uses the styled builder from clipper.core.captions. An unknown
+    style raises ValueError (caller error — fail fast, don't silently
+    ship the wrong look); a missing captions module falls back to plain
+    captions and the cut still succeeds."""
+    if style is None:
+        _build_ass(words, start, end, hook, path)
+        return
+    if not _CAPTIONS_AVAILABLE:
+        print("[cut] caption style requested but clipper.core.captions "
+              "unavailable — plain captions", flush=True)
+        _build_ass(words, start, end, hook, path)
+        return
+    if style not in _CAPTION_STYLES:
+        raise ValueError(
+            f"unknown caption style {style!r}; expected one of "
+            f"{_CAPTION_STYLES}")
+    path.write_text(
+        _styled_build_ass(words, start, end, hook=hook, style=style),
+        encoding="utf-8")
+    print(f"[cut] captions style={style}", flush=True)
 
 
 def _safety_check(video_path, start, end, words):
@@ -288,6 +328,33 @@ def _probe_size(video_path):
         return 1280, 720
 
 
+def _check_download(video_path, source):
+    """Fail fast on an empty/invalid download (found 2026-11-20, Modal
+    logs): yt-dlp --download-sections exits 0 but writes only a 261-byte
+    file for Twitch VOD v2934030540 — same empty-section failure mode as
+    Nov 19. Without this check the empty file reaches faster-whisper,
+    which crashes with IndexError (no audio stream) after minutes of
+    wasted GPU time (4 failed cuts today). Requires a video stream AND
+    an audio stream, and a file over ~100KB; otherwise raises
+    RuntimeError immediately, in seconds."""
+    import subprocess
+
+    size = video_path.stat().st_size if video_path.exists() else 0
+    if size <= 100 * 1024:
+        raise RuntimeError(
+            f"download produced an empty/invalid file for {source} "
+            f"(size={size}B)")
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+         "-of", "csv=p=0", str(video_path)],
+        capture_output=True, text=True, timeout=30)
+    kinds = set(probe.stdout.split())
+    if "video" not in kinds or "audio" not in kinds:
+        raise RuntimeError(
+            f"download produced an empty/invalid file for {source} "
+            f"(size={size}B, streams={sorted(kinds)})")
+
+
 def _resolve_crop(src, clip_start, clip_end, supplied_track):
     """Pick the crop keyframes for one cut window.
 
@@ -338,7 +405,8 @@ def _resolve_crop(src, clip_start, clip_end, supplied_track):
 
 
 @app.function(image=image, gpu="T4", timeout=1200, scaledown_window=300, max_containers=1)
-def cut_clip(source, start, end, hook="", title="", track=None):
+def cut_clip(source, start, end, hook="", title="", track=None,
+             caption_style=None):
     """Cut one clip on GPU. Returns (mp4_bytes, safety_verdict_dict).
     `source` is a URL (VOD / own footage) or a Modal Volume path.
     `track` is optional crop keyframes [[t_rel, x_px], ...] (clip.py
@@ -347,7 +415,10 @@ def cut_clip(source, start, end, hook="", title="", track=None):
     computes a lightweight motion track on the downloaded section and
     falls back to a static centre crop if that fails. Kept as a plain
     function so it can also be called from Python
-    (`modal run modal_app.py::cut_clip`) for testing."""
+    (`modal run modal_app.py::cut_clip`) for testing.
+    `caption_style` is optional (karaoke/pop/minimal, English only) —
+    None keeps today's plain word captions; a style name renders the
+    styled captions from clipper.core.captions."""
     import subprocess
     import tempfile
     from pathlib import Path
@@ -402,6 +473,13 @@ def cut_clip(source, start, end, hook="", title="", track=None):
                 raise RuntimeError(f"download failed: {(r.stderr or '')[-500:]}")
             # Full file: absolute timestamps are correct again.
             section_start, offset, rel_end = 0.0, start, end
+        # Guard (2026-11-20): yt-dlp can exit 0 while writing a 261-byte
+        # empty section file (VOD v2934030540, 4 failed cuts today). Fail
+        # fast here, in seconds, instead of feeding the empty file to
+        # faster-whisper and crashing with IndexError after minutes of
+        # GPU time. Covers BOTH the section path and the full-download
+        # fallback above — both converge here.
+        _check_download(src, source)
         # Transcribe on the GPU: CUDA + float16. The earlier CPU
         # fallback was only because libcublas wasn't on the loader
         # path — fixed above with LD_LIBRARY_PATH, so CUDA is tried
@@ -418,7 +496,7 @@ def cut_clip(source, start, end, hook="", title="", track=None):
         print(f"[cut] transcribed {len(words)} words (cuda)", flush=True)
         safety = _safety_check(src, offset, rel_end, words)
         ass = td / "clip.ass"
-        _build_ass(words, offset, rel_end, hook, ass)
+        _write_ass(words, offset, rel_end, hook, ass, caption_style)
         out = td / "clip_fill.mp4"
         # Tracked full-fill 9:16 crop (workstream B): follow the
         # caller-supplied track, else compute a lightweight motion
@@ -471,8 +549,11 @@ def cut(item: dict, request: Request):
     Optional `track` (alias `crop_keyframes`): crop keyframes
     [[t_rel, x_px], ...] from the CPU path — the cut follows them;
     without it the cutter computes its own lightweight motion track,
-    falling back to centre crop. All fields except source/start/end
-    are optional; adding `track` changes nothing for old callers.
+    falling back to centre crop. Optional `caption_style`
+    (karaoke/pop/minimal, English only): None keeps today's plain word
+    captions; a style name renders styled captions. All fields except
+    source/start/end are optional; adding `track`/`caption_style`
+    changes nothing for old callers.
     Returns the mp4 bytes with X-Safety-Verdict / X-Duration-S headers.
     Auth: when the env var MODAL_SHARED_SECRET is set on the Modal app,
     the request must carry header X-Clipper-Auth with that value.
@@ -489,7 +570,9 @@ def cut(item: dict, request: Request):
     hook = item.get("hook", "")
     title = item.get("title", "")
     track = item.get("track", item.get("crop_keyframes"))
-    data, safety = cut_clip.remote(source, start, end, hook, title, track)
+    caption_style = item.get("caption_style")
+    data, safety = cut_clip.remote(source, start, end, hook, title, track,
+                                   caption_style)
     return Response(
         content=data, media_type="video/mp4",
         headers={

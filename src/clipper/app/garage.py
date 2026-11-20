@@ -55,6 +55,116 @@ def probe(path):
         return 0.0
 
 
+def _next_edit_path(clip):
+    """First free <stem>-edit<N>.mp4 next to the original — never overwrite."""
+    i = 1
+    while True:
+        cand = clip.with_name(f"{clip.stem}-edit{i}.mp4")
+        if not cand.exists():
+            return cand
+        i += 1
+
+
+def validate_trim(start, end, duration):
+    """Trim-bounds check: 0 <= start < end <= duration.
+
+    Returns an error string, or None when the trim is valid. Never
+    produce a corrupt/empty file from a bad trim — callers refuse
+    anything this rejects."""
+    try:
+        start = float(start)
+        end = float(end)
+        duration = float(duration)
+    except (TypeError, ValueError):
+        return "start and end must be numbers (seconds)"
+    if duration <= 0:
+        return "could not read the clip duration — refusing to trim"
+    if start < 0:
+        return f"start {start:g}s is before 0"
+    if end <= start:
+        return f"end {end:g}s must be after start {start:g}s"
+    if end > duration:
+        return f"end {end:g}s is past the clip duration ({duration:g}s)"
+    return None
+
+
+def save_edit(clip, start, end):
+    """Trim a garage clip and save it as a NEW clip (never overwrites).
+
+    clip: path (or garage file string) of a registered clip.
+    start/end: seconds within the clip, validated by validate_trim().
+    Returns the new garage row. Raises ValueError on bad input and
+    RuntimeError if ffmpeg fails or the output is unusable (any
+    partial output is deleted)."""
+    clip = Path(clip).resolve()
+    if not clip.is_file():
+        raise ValueError(f"clip not found: {clip}")
+    rows = load()
+    src_row = next((r for r in rows if r.get("file") == str(clip)), None)
+    if src_row is None:
+        raise ValueError(f"clip is not in the garage: {clip}")
+    duration = probe(clip)
+    err = validate_trim(start, end, duration)
+    if err:
+        raise ValueError(err)
+    start, end = float(start), float(end)
+
+    out = _next_edit_path(clip)
+    cmd = ["ffmpeg", "-y", "-v", "error",
+           "-ss", f"{start:.2f}", "-to", f"{end:.2f}",
+           "-i", str(clip),
+           # veryfast (not medium): the editor is interactive — a 1080x1920
+           # medium encode took >2 min on this shared-CPU VM and outlasted
+           # a browser request. Same crf, same output, much faster.
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+           "-pix_fmt", "yuv420p", "-c:a", "copy",
+           "-movflags", "+faststart", str(out)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        if out.exists():
+            out.unlink()
+        raise RuntimeError(f"ffmpeg trim failed: {r.stderr.strip()[:300]}")
+    out_dur = probe(out)
+    if out_dur <= 0 or abs(out_dur - (end - start)) > 0.6:
+        if out.exists():
+            out.unlink()
+        raise RuntimeError(
+            f"trim output unusable (duration {out_dur}s, expected "
+            f"{end - start:.1f}s) — partial file removed")
+
+    # Sidecar .json next to the edit, mirroring the source clip's.
+    src_meta_path = clip.with_suffix(".json")
+    meta = (json.loads(src_meta_path.read_text(encoding="utf-8"))
+            if src_meta_path.exists() else {})
+    meta.update({
+        "file": str(out),
+        "edited_from": str(clip),
+        "trim_start": start,
+        "trim_end": end,
+        "edit_of_start": meta.get("start"),
+        "edit_of_end": meta.get("end"),
+        "caption_style": "as-burned",
+    })
+    out.with_suffix(".json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    row = dict(src_row)
+    row.update({
+        "file": str(out),
+        "file_16x9": "",
+        "duration_s": round(out_dur, 1),
+        "status": "new",
+        "edited_from": str(clip),
+        "trim_start": start,
+        "trim_end": end,
+    })
+    rows = [row] + [x for x in rows if x.get("file") != row["file"]]
+    save(rows)
+    print(f"garage: edited {clip.name} {start:.2f}-{end:.2f}s -> "
+          f"{out.name} ({out_dur:.1f}s) — {len(rows)} clips total")
+    return row
+
+
 def register(clip, moment="", stars=0):
     clip = Path(clip).resolve()
     meta_path = clip.with_suffix(".json")
@@ -80,6 +190,11 @@ def register(clip, moment="", stars=0):
         "layout": meta.get("layout", ""),
         "source_url": meta.get("source_url", ""),
         "source_title": meta.get("source_title", ""),
+        # Virality (workstream A): moment entries in candidates.json may
+        # carry virality (int 0-100) + virality_why (string). Defensive
+        # .get — rows without them simply show no score.
+        "virality": meta.get("virality"),
+        "virality_why": meta.get("virality_why", ""),
     }
     rows = [row] + [r for r in rows if r["file"] != row["file"]]
     save(rows)
@@ -93,10 +208,19 @@ def build(rows=None):
     cards = ""
     for r in rows:
         stars = "★" * int(r.get("stars", 0)) + "☆" * (5 - int(r.get("stars", 0)))
+        vir = r.get("virality")
+        vir_line = ""
+        if isinstance(vir, (int, float)):
+            why = (r.get("virality_why") or "").strip()
+            vir_line = f"<br>🔥 virality {vir}/100" + (f" — {why}" if why else "")
+        edit_line = ""
+        if r.get("edited_from"):
+            edit_line = (f"<br>✂ edit of {Path(r['edited_from']).name} "
+                         f"({r.get('trim_start')}–{r.get('trim_end')}s)")
         cards += (
             f'<div class="card"><video src="file://{r["file"]}" controls preload="metadata"></video>'
             f'<h3>{r["moment"] or r["source_title"] or "Clip"}</h3>'
-            f'<p>{stars} · {r["duration_s"]}s · {r["status"]} · safety {r.get("safety", "?")} · {r.get("layout", "")}<br>'
+            f'<p>{stars} · {r["duration_s"]}s · {r["status"]} · safety {r.get("safety", "?")} · {r.get("layout", "")}{vir_line}{edit_line}<br>'
             f'{r["stream"]} · {r["platform"]}<br>'
             f'<code>{r["file"]}</code></p></div>\n')
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>GTA 6 Video Garage</title>
