@@ -29,6 +29,7 @@ import html
 import json
 import os
 import re
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -492,16 +493,18 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        # Strip any query string (e.g. /?v=2 cache-buster) before matching.
+        path = urllib.parse.urlparse(self.path).path
+        if path in ("/", "/index.html"):
             try:
                 self._send(200, render(collect_state()), "text/html; charset=utf-8")
             except Exception as e:
                 self._send(500, f"Dashboard error: {html.escape(str(e))}",
                            "text/plain; charset=utf-8")
-        elif self.path == "/api/state":
+        elif path == "/api/state":
             self._send(200, json.dumps(collect_state(), ensure_ascii=False, indent=1),
                        "application/json")
-        elif self.path == "/api/health":
+        elif path == "/api/health":
             self._send(200, json.dumps({"status": "ok", "app": APP_NAME}),
                        "application/json")
         else:
