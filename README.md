@@ -1,16 +1,9 @@
-# Clipper Engine — our own, free version
+# Clipper Engine
 
-Built 2026-11-19 from gtavi-claudecode (`~/workspace/gta-test/gtavi-claudecode`,
-MIT) plus the feature list of the paid app at
-https://clipper.frogbundle.store/ — **copied as features only, not bought,
-not downloaded**. That app is a one-time-payment lifetime app, Mac &
-Windows, no sign-up, download only after payment. Ours is free, runs on
+Built 2026-11-19 from gtavi-claudecode (MIT). Runs on
 this VM, no payment, no sign-up, no cookies.
 
-> The paid app's stream names (Viceviper, Lossantos_live, Driftkingz,
-> Nightowl_rp, Blaze.tv, Motormouth) look like demo/mock data, not real
-> top streamers — do NOT treat them as real. Our dashboard lists REAL
-> live streams, checked live.
+Our dashboard lists REAL live streams, checked live.
 
 ## Hard rule (Vice City Vibes Rule 2/11 — non-negotiable)
 
@@ -41,9 +34,9 @@ originals do NOT need a streamer credit.
   request a takedown. Never claim a credited re-upload is fully legal /
   safe from takedown.
 
-## What it does (paid app's features, our build)
+## What it does
 
-| Paid app feature | Our version |
+| Feature | Our version |
 |---|---|
 | Stream Dashboard — top Twitch/YouTube GTA 6 streams ranked by viewers + chat heat | `dashboard.py` — real live data via gtavi `streams.py` + `trends.py` |
 | Add your own stream links / watchlist pin-hide | `watchlist.json` (`pinned`, `links`, `hidden`) |
@@ -145,24 +138,6 @@ bundle, which fixed HF downloads (tiny model in ~2s).
 - `clips/` — spare folder for finished exports
 
 ## FINAL BUILD (2026-11-19, evening) — 9:16 full-fill, content filter
-
-Reference spec: https://clipper.frogbundle.store/ (checked live
-2026-11-19 23:16 UTC) — "1 GTA 6 Live Stream = 50 Viral Clips, Zero
-editing, 100% FREE" (it is actually a one-time-payment app, Mac &
-Windows, download after payment — ours is free). Every feature on
-that page is implemented here:
-
-| Frogbundle feature | Our version |
-|---|---|
-| Stream Dashboard — top Twitch + YouTube GTA 6 streams, ranked by viewers + chat heat, Most Wanted | `dashboard.py` — REAL live data (16 YT + 20 Twitch at last check); the page's stream names (Viceviper, Lossantos_live, Driftkingz…) are demo/mock data, ours are real |
-| Add your own links / watchlist, pin / hide | `watchlist.json` + `dashboard.py` |
-| Auto-pilot — picks best stream, swaps when better ones show up, monitors live chat while recording | `autopilot.py` — suggests only; a human confirms ownership/campaign before any recording |
-| Hype Meter — chat speed + hype words + loud moments, 5 stars = clip-worthy | `clip.py hype` — stars from gtavi moments.py scores |
-| Auto-clip on hype | `clip.py scout` → `clip.py cut --pick N` |
-| Manual Clip it now / Mark Start / Mark End, up to 50 clips per stream, parks at 50 | `clip.py manual` / `cut`, `garage.py` enforces the 50 cap |
-| Cutting Room 4× speed, auto-edit with captions | `clip.py cut` + `clip.py polish` (Auto-Editor silence trim) |
-| Exports 16:9 + 9:16, title + hashtags, for TikTok / IG Reels / YT Shorts / FB Reels / YT+X landscape | `clip.py export` (16:9); **the 9:16 vertical is now FULL-FILL — see below** |
-| Video Garage — sorted by streamer/platform/moment, preview / approve / export / delete, clip counts + GB | `garage.py` + `garage/index.html` + `garage/clips.json` |
 
 ### 9:16 FULL-FILL (fixed 2026-11-19 — Ajay caught the bug)
 The old default (gtavi cut.py "blur" layout) put a small 16:9 frame
