@@ -7,6 +7,10 @@ visual signal — scene-change density (PySceneDetect when installed, else a che
 plus facecam presence via the existing facecam code — and a short human-readable
 virality_why string. The visual component degrades gracefully to 0 when its dependencies
 or the source video are unavailable; scoring never crashes over it.
+Reaction signals ported from OpenClip (clipper.core.reactions) add capped
+funny / highlight / clippable terms, loudness lift vs a rolling median
+baseline, and sustained on-screen action as ADDITIONAL terms alongside the
+chat signal — the chat/loud/hype/heat weights are unchanged.
 Writes jobs/<id>/candidates.md + candidates.json.
 
 usage: python moments.py <url-or-file> [--top 8] [--min 15] [--max 40] [--chat chat.json] [--max-minutes 90]
@@ -20,6 +24,27 @@ from common import ffprobe, is_url, job_dir, load_json, run, save_json, tool, yt
 HYPE = re.compile(r"\b(no way|oh my god|omg|what|wait|bro|let'?s go|holy|insane|crazy|yo+|wtf|dude|look at|nah|run|go go)\b", re.I)
 CHAT_HYPE = re.compile(r"(LMAO|LOL|KEKW|OMEGALUL|W+\b|CLIP|💀|😂|🔥|NO WAY|HOLY)", re.I)
 
+# OpenClip reaction signals (clipper.core.reactions) — additive terms only.
+# The import is guarded: if the module is unavailable, every weight below
+# stays 0.0 and scoring is byte-for-byte the pre-reaction behaviour.
+_src = Path(__file__).resolve().parents[3]  # <engine>/src
+if str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
+REACTIONS = False
+W_FUNNY = W_HIGHLIGHT = W_CLIPPABLE = W_LOUD_LIFT = W_LOUD_PEAK = W_ACTION = 0.0
+try:
+    from clipper.core.reactions import (
+        W_ACTION as _W_ACTION, W_CLIPPABLE as _W_CLIPPABLE, W_FUNNY as _W_FUNNY,
+        W_HIGHLIGHT as _W_HIGHLIGHT, W_LOUD_LIFT as _W_LOUD_LIFT,
+        W_LOUD_PEAK as _W_LOUD_PEAK, action_series, loudness_lift_peak,
+        reaction_series,
+    )
+    W_FUNNY, W_HIGHLIGHT, W_CLIPPABLE = _W_FUNNY, _W_HIGHLIGHT, _W_CLIPPABLE
+    W_LOUD_LIFT, W_LOUD_PEAK, W_ACTION = _W_LOUD_LIFT, _W_LOUD_PEAK, _W_ACTION
+    REACTIONS = True
+except Exception:
+    pass
+
 
 def fetch(src, d, max_min):
     info = {}
@@ -29,7 +54,30 @@ def fetch(src, d, max_min):
                                                              "duration", "view_count", "upload_date", "heatmap", "is_live", "was_live")})
         vid = d / "source.mp4"
         if not vid.exists():
-            args = ytdlp_base() + ["-f", "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b", "--merge-output-format", "mp4",
+            # Item #7: disk-guard pre-flight (clipper.core.disk_guard lands
+            # in parallel; until then the import fails and we proceed
+            # unguarded). Estimated size from the probe when known, else
+            # the conservative 500 MB default.
+            try:
+                from clipper.core.disk_guard import preflight
+                preflight(d, info.get("filesize") or info.get("filesize_approx")
+                          or 500 * 1024 * 1024)
+            except ImportError:
+                pass
+            # Item #7: hardened retry flags ride in the patched
+            # ytdlp_base(); add only the per-download archive (reruns skip
+            # completed IDs). Standalone runs without clipper on sys.path
+            # fall back to the same literal flag.
+            try:
+                from clipper.infra.ssl_fix import hardened_download_args
+                archive_args = hardened_download_args(d / "archive.txt")
+            except ImportError:
+                archive_args = ["--download-archive", str(d / "archive.txt")]
+            # Item #8 (2026-11-25): prefer true 1080p60, then any 1080p,
+            # then 720p. The mp4/m4a constraint is kept (same as before);
+            # only the 60 fps preference is added in front. 1080p cap
+            # kept: the 1440p upload trick is out of scope.
+            args = ytdlp_base() + archive_args + ["-f", "bv*[height=1080][fps=60][ext=mp4]+ba[ext=m4a]/bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080]/b", "--merge-output-format", "mp4",
                                    "-o", str(vid)]
             if (info.get("duration") or 0) > max_min * 60:
                 args += ["--download-sections", f"*0-{max_min * 60}"]
@@ -123,6 +171,14 @@ def smooth(a, k):
 # and scoring continues from the other signals — never crash scoring.
 
 VISUAL_WEIGHT = 1.0  # same scale as the raw-score weights (loud 1.0, hype 0.8, heat 2.0, chat 1.5)
+
+# ITEM 4 — payoff front-load at scan time: a candidate window opens
+# PEAK_LEAD seconds before its peak, so the peak already sits in the
+# first 2 s of the window (was 0.55 * max — peak mid-clip, which the
+# feed data punishes: slow opens held 24.4% vs 77.5% for payoff in
+# the first 2 s). The cut-time slide in core/clip.py then only has to
+# nudge it to ~0.5 s — a small slide that rarely crosses a scene cut.
+PEAK_LEAD = 2.0
 
 
 def _p99norm(a):
@@ -287,7 +343,8 @@ def _hype_words(text, limit=2):
     return seen[:limit]
 
 
-def virality_why(p, loud_v, hype_words, heat_v, chat_v, w_chat, scene_v, face_conf):
+def virality_why(p, loud_v, hype_words, heat_v, chat_v, w_chat, scene_v, face_conf,
+                 funny_v=0.0, highlight_v=0.0, action_v=0.0):
     """Short human-readable reason for a virality score, e.g.
     "loud peak + hype words 'insane' + face on camera"."""
     parts = []
@@ -295,6 +352,12 @@ def virality_why(p, loud_v, hype_words, heat_v, chat_v, w_chat, scene_v, face_co
         parts.append("loud peak")
     if hype_words:
         parts.append("hype words " + ", ".join(f"'{w}'" for w in hype_words))
+    if funny_v >= 22:
+        parts.append("laugh moment")
+    if highlight_v >= 14:
+        parts.append("strong reaction")
+    if action_v > 0.5:
+        parts.append("sustained action")
     if heat_v > 0.5:
         parts.append("most replayed")
     if w_chat and chat_v > 1:
@@ -321,7 +384,7 @@ def main():
     n = len(db)
     words = transcribe(wav, d)
     # signals
-    loud = smooth(np.clip(z(db - smooth(db, 30)), 0, None), 3)          # jumps above the local level
+    loud = smooth(np.clip(z(db - smooth(db, min(30, n))), 0, None), 3)          # jumps above the local level
     hype = np.zeros(n)
     for w in words:
         if HYPE.search(w["w"]) and int(w["s"]) < n:
@@ -334,7 +397,33 @@ def main():
     chatz = smooth(np.clip(z(smooth(chat, 10)), 0, None), 3)
     w_heat = 2.0 if heat.any() else 0
     w_chat = 1.5 if chat.any() else 0
-    score = 1.0 * loud + 0.8 * z(hype).clip(0) + w_heat * z(heat).clip(0) + w_chat * chatz
+    # OpenClip reaction terms (additive; loud/hype/heat/chat weights above
+    # are untouched). All components are 0..1 p99-normalised, each weight
+    # <= 0.5, so no single cue can dominate. Degrades to zeros when the
+    # reactions module is unavailable or any step fails.
+    funny = highlight = clippable = np.zeros(n)
+    funny_n = highlight_n = clippable_n = np.zeros(n)
+    lift_n = peak_n = action_n = np.zeros(n)
+    action_meta = {"method": None, "max": 0.0}
+    if REACTIONS:
+        try:
+            rs = reaction_series(words, n, db)
+            funny, highlight, clippable = rs["funny"], rs["highlight"], rs["clippable"]
+            funny_n, highlight_n, clippable_n = rs["funny_n"], rs["highlight_n"], rs["clippable_n"]
+            lift, peak = loudness_lift_peak(db)
+            lift_n, peak_n = _p99norm(lift), _p99norm(peak)
+        except Exception:
+            pass
+        try:
+            act = action_series(vid, n) if dur <= 1800 else None
+            if act is not None:
+                action_n = _p99norm(act)
+                action_meta = {"method": "ffmpeg-framediff-32x18", "max": round(float(act.max()), 2)}
+        except Exception:
+            pass
+    score = 1.0 * loud + 0.8 * z(hype).clip(0) + w_heat * z(heat).clip(0) + w_chat * chatz \
+        + W_FUNNY * funny_n + W_HIGHLIGHT * highlight_n + W_CLIPPABLE * clippable_n \
+        + W_LOUD_LIFT * lift_n + W_LOUD_PEAK * peak_n + W_ACTION * action_n
     # Visual signal (scene-change density + facecam); degrades to 0, never crashes scoring.
     # The raw `score` above is unchanged, so the 0-5 star Hype Meter in core/clip.py
     # (stars() over score) behaves exactly as before.
@@ -355,8 +444,11 @@ def main():
     heat_n = _p99norm(z(heat).clip(0)) if w_heat else np.zeros(n)
     chat_n = _p99norm(chatz) if w_chat else np.zeros(n)
     vis_n = np.clip(visual, 0, 1) if w_visual else np.zeros(n)
-    w_total = 1.0 + 0.8 + w_heat + w_chat + w_visual
-    virality = np.sqrt((1.0 * loud_n + 0.8 * hype_n + w_heat * heat_n + w_chat * chat_n + w_visual * vis_n) / w_total) * 100
+    w_total = 1.0 + 0.8 + w_heat + w_chat + w_visual \
+        + W_FUNNY + W_HIGHLIGHT + W_CLIPPABLE + W_LOUD_LIFT + W_LOUD_PEAK + W_ACTION
+    virality = np.sqrt((1.0 * loud_n + 0.8 * hype_n + w_heat * heat_n + w_chat * chat_n + w_visual * vis_n
+                        + W_FUNNY * funny_n + W_HIGHLIGHT * highlight_n + W_CLIPPABLE * clippable_n
+                        + W_LOUD_LIFT * lift_n + W_LOUD_PEAK * peak_n + W_ACTION * action_n) / w_total) * 100
     # pick non-overlapping windows around peaks
     starts = [x["s"] for x in words]
     picks, used = [], np.zeros(n, bool)
@@ -364,7 +456,7 @@ def main():
     for p in order:
         if len(picks) >= a.top or score[p] <= 0:
             break
-        s0 = max(0, p - 0.55 * a.max); e0 = min(dur, s0 + a.max)
+        s0 = max(0, p - PEAK_LEAD); e0 = min(dur, s0 + a.max)  # ITEM 4: peak ~2 s into the window, not mid-clip
         # snap start to the first word after s0 and end to a word end, keep length in [min, max]
         ws = [x for x in words if x["s"] >= s0 and x["e"] <= e0]
         if ws:
@@ -379,11 +471,16 @@ def main():
         why = []
         if loud[p] > 1: why.append("loudness spike")
         if hype[p] > 0: why.append("hype words")
+        if funny[p] >= 22: why.append("laugh moment")
+        if highlight[p] >= 14: why.append("strong reaction")
+        if clippable[p] >= 30: why.append("clip cue")
+        if action_n[p] > 0.5: why.append("sustained action")
         if heat[p] > 0.5: why.append(f"most replayed {heat[p]:.2f}")
         if w_chat and chatz[p] > 1: why.append("chat spike")
         v = int(round(float(np.clip(virality[p], 0, 100))))
         vwhy = virality_why(p, loud[p], _hype_words(text), heat[p], chatz[p], w_chat,
-                            scene_n[p], visual_meta.get("face_confidence") or 0.0)
+                            scene_n[p], visual_meta.get("face_confidence") or 0.0,
+                            funny[p], highlight[p], action_n[p])
         picks.append({"n": len(picks) + 1, "start": round(s0, 2), "end": round(e0, 2), "peak": int(p),
                       "score": round(float(score[p]), 2), "why": why or ["overall energy"], "text": text[:400],
                       "virality": v, "virality_why": vwhy})
@@ -395,6 +492,9 @@ def main():
                                       "signals": {"heatmap": bool(w_heat), "chat": bool(w_chat), "words": len(words),
                                                   "visual": visual_meta.get("method") or False,
                                                   "visual_cuts": visual_meta.get("cuts", 0),
+                                                  "reactions": bool(REACTIONS),
+                                                  "action": action_meta.get("method") or False,
+                                                  "action_max": action_meta.get("max", 0.0),
                                                   "face": visual_meta.get("face_mode", "none")}})
     fmt = lambda t: f"{int(t // 60)}:{int(t % 60):02d}"
     if visual_meta.get("method"):
@@ -403,8 +503,10 @@ def main():
     else:
         visual_line = "visual: unavailable (scored from audio/transcript only)"
     md = [f"# Candidates: {meta.get('title', '')}", f"source: {meta.get('webpage_url', '')}",
-          f"signals: loudness, transcript ({len(words)} words)" + (", most replayed" if w_heat else "") + (", chat" if w_chat else ""),
+          f"signals: loudness, transcript ({len(words)} words)" + (", most replayed" if w_heat else "") + (", chat" if w_chat else "") + (", reactions" if REACTIONS else ""),
           visual_line, ""]
+    if action_meta.get("method"):
+        md.insert(4, f"action: {action_meta['method']} (max {action_meta['max']})")
     for x in picks:
         md += [f"## {x['n']}. {fmt(x['start'])}-{fmt(x['end'])} ({x['end'] - x['start']:.0f}s) score {x['score']}",
                f"why: {', '.join(x['why'])}", f"virality: {x['virality']}/100 — {x['virality_why']}", f"> {x['text']}", ""]

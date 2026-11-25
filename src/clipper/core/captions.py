@@ -15,7 +15,7 @@ its ASS styling:
 
 Public API:
     STYLE_NAMES = ["karaoke", "pop", "minimal"]
-    build_ass(words, s0, e0, hook="", cap_y=1380, style="karaoke") -> str
+    build_ass(words, s0, e0, hook="", cap_y=1080, style="karaoke") -> str
     render_captions(input_mp4, words, style="karaoke", output_mp4=None,
                     start=None) -> str
 
@@ -100,7 +100,7 @@ _STYLES = {
 # Hook style, shared by all three styles (same as today's Hook style).
 _HOOK_STYLE = ("Style: Hook,Arial Black,68,&H00000000,&H00000000,"
                "&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,18,0,8,"
-               "70,70,170,1")
+               "70,70,400,1")
 
 
 def _validate_style(style):
@@ -137,7 +137,7 @@ def _style_line(spec):
             "{outline},{shadow},5,60,60,0,1".format(**spec))
 
 
-def build_ass(words, s0, e0, hook="", cap_y=1380, style="karaoke"):
+def build_ass(words, s0, e0, hook="", cap_y=1080, style="karaoke"):
     """Build an ASS subtitle string for one clip window.
 
     Same grouping as the existing cut.build_ass (groups of up to 3
@@ -255,7 +255,7 @@ def render_captions(input_mp4, words, style="karaoke", output_mp4=None,
         if ends:
             e0 = max(ends)
 
-    ass_text = build_ass(words, s0, e0, hook="", cap_y=1380, style=style)
+    ass_text = build_ass(words, s0, e0, hook="", cap_y=1080, style=style)
     with tempfile.TemporaryDirectory(prefix="captions_") as tmp:
         ass_path = Path(tmp) / f"captions_{style}.ass"
         ass_path.write_text(ass_text, encoding="utf-8")

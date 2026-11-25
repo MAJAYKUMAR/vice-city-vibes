@@ -214,11 +214,13 @@ def crop_x_expr(keyframes):
     return expr
 
 
-def fill_filter(src_w, src_h, keyframes, ass_path):
+def fill_filter(src_w, src_h, keyframes, ass_path, fps=30):
     """Full ffmpeg video filter for a full-fill 9:16 cut with captions.
 
-    scale-to-cover 1080x1920, crop with the tracked x path, fps 30,
-    burned word-by-word captions from the .ass file.
+    scale-to-cover 1080x1920, crop with the tracked x path, source fps
+    preserved (capped at 60 by the caller — never upsampled), burned
+    word-by-word captions from the .ass file. `fps` defaults to 30 for
+    callers that did not probe the source.
     """
     sw_scaled = scaled_width(src_w, src_h)
     # ffmpeg's filter-graph parser splits on commas, so the commas
@@ -230,8 +232,9 @@ def fill_filter(src_w, src_h, keyframes, ass_path):
     # escape, plus apostrophes.
     from clipper.core.openshorts_ffmpeg_utils import escape_filter_value
     sub = escape_filter_value(str(ass_path))
-    return (f"[0:v]scale={sw_scaled}:{H},crop={W}:{H}:{x_expr}:0,"
-            f"setsar=1,fps=30,subtitles='{sub}'[vo]")
+    return (f"[0:v]scale={sw_scaled}:{H}:flags=lanczos,"
+            f"unsharp=5:5:1.0:5:5:0.5,crop={W}:{H}:{x_expr}:0,"
+            f"setsar=1,fps={fps},subtitles='{sub}'[vo]")
 
 
 if __name__ == "__main__":

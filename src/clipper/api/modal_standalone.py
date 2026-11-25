@@ -459,14 +459,17 @@ def cut_clip(source, start, end, hook="", title="", track=None,
         rel_end = end - section_start           # offset + clip length
         duration = end - start
         r = subprocess.run(
-            ["yt-dlp", "-f", "bestvideo[height<=1080]+bestaudio/best",
+            # Item #8 (2026-11-25): prefer true 1080p60, then any 1080p,
+            # then 720p. This window IS the pick fetch — the clip is cut
+            # from it. 1080p cap kept: the 1440p upload trick is out of scope.
+            ["yt-dlp", "-f", "bestvideo[height=1080][fps=60]+bestaudio/bestvideo[height=1080]+bestaudio/bestvideo[height<=720]+bestaudio/best",
              "--download-sections", f"*{section_start:.1f}-{end + 1:.1f}",
              "-o", str(src), source],
             capture_output=True, text=True, timeout=600)
         if r.returncode != 0 or not src.exists():
             # Fall back to a full download (some sources reject sections).
             r = subprocess.run(
-                ["yt-dlp", "-f", "bestvideo[height<=1080]+bestaudio/best",
+                ["yt-dlp", "-f", "bestvideo[height=1080][fps=60]+bestaudio/bestvideo[height=1080]+bestaudio/bestvideo[height<=720]+bestaudio/best",
                  "-o", str(src), source],
                 capture_output=True, text=True, timeout=900)
             if r.returncode != 0 or not src.exists():

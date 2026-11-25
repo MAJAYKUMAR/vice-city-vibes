@@ -185,8 +185,10 @@ def register(clip, moment="", stars=0):
         "moment": moment or meta.get("hook") or meta.get("title") or "",
         "duration_s": round(probe(clip), 1),
         "stars": stars,
-        "status": "blocked" if (meta.get("safety") or {}).get("verdict") == "BLOCK" else "new",
+        "status": "blocked" if ((meta.get("safety") or {}).get("verdict") == "BLOCK"
+                                or (meta.get("copyright") or {}).get("verdict") == "BLOCK") else "new",
         "safety": (meta.get("safety") or {}).get("verdict", "unknown"),
+        "copyright": (meta.get("copyright") or {}).get("verdict", "unknown"),
         "layout": meta.get("layout", ""),
         "source_url": meta.get("source_url", ""),
         "source_title": meta.get("source_title", ""),
@@ -220,7 +222,7 @@ def build(rows=None):
         cards += (
             f'<div class="card"><video src="file://{r["file"]}" controls preload="metadata"></video>'
             f'<h3>{r["moment"] or r["source_title"] or "Clip"}</h3>'
-            f'<p>{stars} · {r["duration_s"]}s · {r["status"]} · safety {r.get("safety", "?")} · {r.get("layout", "")}{vir_line}{edit_line}<br>'
+            f'<p>{stars} · {r["duration_s"]}s · {r["status"]} · safety {r.get("safety", "?")} · copyright {r.get("copyright", "?")} · {r.get("layout", "")}{vir_line}{edit_line}<br>'
             f'{r["stream"]} · {r["platform"]}<br>'
             f'<code>{r["file"]}</code></p></div>\n')
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>GTA 6 Video Garage</title>
@@ -252,6 +254,10 @@ def main():
             if r["file"] == str(Path(a.clip).resolve()):
                 if a.cmd == "approve" and r.get("safety") == "BLOCK":
                     print(f"garage: REFUSED — {a.clip} is safety BLOCKED "
+                          f"(never approve/post).")
+                    return
+                if a.cmd == "approve" and r.get("copyright") == "BLOCK":
+                    print(f"garage: REFUSED — {a.clip} is copyright BLOCKED "
                           f"(never approve/post).")
                     return
                 r["status"] = "approved" if a.cmd == "approve" else "exported"

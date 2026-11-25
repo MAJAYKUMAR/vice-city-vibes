@@ -1,0 +1,26 @@
+# Streamer opt-out blocklist — streamers with real evidence of
+# clip opt-outs or takedown history. check_clip() BLOCKs any clip
+# whose streamer matches an entry here (normalised name/handle
+# match); garage.py then refuses to approve it, and workers file it
+# as a Section D HELD entry in clip-queue.md, exactly like a safety
+# BLOCK.
+#
+# FORMAT — one entry per streamer:
+# - name: "StreamerName"        # display / channel name
+#   platform: "Twitch"          # Twitch | YouTube | Kick | ...
+#   handle: "streamerhandle"    # channel handle or slug (used for matching)
+#   url: "https://twitch.tv/streamerhandle"   # channel URL
+#   reason: "Asked for no clips / issued takedowns ..."  # why they are listed
+#   evidence: "https://... or a note describing the evidence"  # REQUIRED:
+#     a URL or a dated note (e.g. "DM from Ajay 2026-11-25"). No evidence,
+#     no entry.
+#   date_added: "2026-11-25"    # YYYY-MM-DD
+#   added_by: "Ajay"            # who confirmed the evidence
+#
+# EMPTY BY DESIGN (2026-11-25): no streamer is listed until Ajay
+# confirms real evidence of an opt-out or takedown. Do NOT add names
+# on suspicion, hearsay, or "probably doesn't like clips".
+#
+# If this file is missing or unparseable, check_clip() caps the clip
+# at REVIEW (never CLEAR, never a crash) and records the reason.
+blocklist: []
